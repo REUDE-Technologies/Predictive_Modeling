@@ -7,6 +7,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.model_selection import train_test_split
 
 # -------------------------------
 # Streamlit page settings / style
@@ -71,6 +72,8 @@ def compute_derived(needle_mm: float, speed_mms: float):
 @st.cache_resource(show_spinner=True)
 def train_model(data_path: str = "Combined_files.csv"):
     df = pd.read_csv(data_path)
+    # Drop unnamed index-like columns if present
+    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
 
     # Harmonize column names used in training
     rename_map = {
@@ -102,6 +105,11 @@ def train_model(data_path: str = "Combined_files.csv"):
     X = df_filtered[features]
     y = df_filtered[target].astype(float)
 
+    # Train/validation split for more realistic metrics
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
     # Set up preprocessing
     numeric_features = ['Pressure (psi)', 'Speed (mm/s)'] + [c for c in present_derived]
     categorical_features = ['Material', 'Time Period', 'Thivex', 'Needle Size']
@@ -119,20 +127,31 @@ def train_model(data_path: str = "Combined_files.csv"):
         ))
     ])
 
-    model.fit(X, y)
+    model.fit(X_train, y_train)
 
-    # Quick internal CV-like split for a headline metric (optional)
-    # Here we just reuse the training set for a simple metric preview.
-    y_hat = model.predict(X)
-    r2 = r2_score(y, y_hat)
-    rmse = mean_squared_error(y, y_hat, squared=False)
+    # Metrics on train and hold-out test split
+    y_hat_train = model.predict(X_train)
+    y_hat_test = model.predict(X_test)
+    r2_train = r2_score(y_train, y_hat_train)
+    # Robust across sklearn versions: prefer squared=False, fallback to manual sqrt
+    try:
+        rmse_train = float(mean_squared_error(y_train, y_hat_train, squared=False))
+    except TypeError:
+        rmse_train = float(np.sqrt(mean_squared_error(y_train, y_hat_train)))
+    r2_test = r2_score(y_test, y_hat_test)
+    try:
+        rmse_test = float(mean_squared_error(y_test, y_hat_test, squared=False))
+    except TypeError:
+        rmse_test = float(np.sqrt(mean_squared_error(y_test, y_hat_test)))
 
     meta = {
         "features": features,
         "numeric_features": numeric_features,
         "categorical_features": categorical_features,
-        "r2_train": r2,
-        "rmse_train": rmse
+        "r2_train": r2_train,
+        "rmse_train": rmse_train,
+        "r2_test": r2_test,
+        "rmse_test": rmse_test
     }
     return model, meta
 
@@ -151,8 +170,8 @@ with st.sidebar:
     material = st.radio("Material", ['DS10', 'DS30', 'SS960'], horizontal=True)
 
     thivex_str = st.radio("Thivex", ['0%', '1%', '2%'], horizontal=True)
-    # Map to training labels (string categories used in data)
-    thivex = thivex_str.replace('%', '')
+    # Keep percent symbol to match training labels
+    thivex = thivex_str
 
     time_label = st.selectbox(
         "Time Period",
@@ -206,7 +225,14 @@ if submitted:
     c2.markdown(f"<div class='metric-box'><h5>Flow Rate (mm³/s)</h5><h3>{flow_mm3_s}</h3></div>", unsafe_allow_html=True)
     c3.markdown(f"<div class='metric-box'><h5>Shear Rate (1/s)</h5><h3>{shear_rate}</h3></div>", unsafe_allow_html=True)
     c4.markdown(f"<div class='metric-box'><h5>Viscosity (Pa·s)</h5><h3>{viscosity}</h3></div>", unsafe_allow_html=True)
-    c5.markdown(f"<div class='metric-box'><h5>Model (train)</h5><h4>R² {meta['r2_train']:.3f} | RMSE {meta['rmse_train']:.1f}</h4></div>", unsafe_allow_html=True)
+    c5.markdown(
+        f"<div class='metric-box'>"
+        f"<h5>Model</h5>"
+        f"<h4>Train: R² {meta['r2_train']:.3f} | RMSE {meta['rmse_train']:.1f}</h4>"
+        f"<h4>Test: R² {meta['r2_test']:.3f} | RMSE {meta['rmse_test']:.1f}</h4>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
     st.markdown("---")
     left, right = st.columns([1,1])
