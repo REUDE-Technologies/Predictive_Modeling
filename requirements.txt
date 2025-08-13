@@ -6,12 +6,3 @@ open3d==0.17.0
 pyulog==0.9.0
 scikit-learn==1.3.0
 matplotlib==3.8.0
-pyulog
-seaborn
-scipy
-watchdog
-openpyxl
-psutil
-opencv-python-headless
-opencv-python
-ultralytics
