@@ -5,3 +5,4 @@ streamlit
 pyulog
 scikit-learn
 matplotlib
+open3d
