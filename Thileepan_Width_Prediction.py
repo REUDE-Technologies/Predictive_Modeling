@@ -288,8 +288,16 @@ if pred_btn:
         st.stop()
 
     # pipe = st.session_state["trained_pipeline"]
-    pipe = pipe.fit(X, y)
+    pipe = st.session_state["trained_pipeline"]
+    data = st.session_state["data"]
     X_cols = st.session_state["X_cols"]
+    
+    X = data[X_cols]
+    y = data[y_col].astype(float)
+    pipe, num_cols, cat_cols = build_model(X, y)
+    pipe.fit(X, y)
+    # pipe = pipe.fit(X, y)
+    # X_cols = st.session_state["X_cols"]
 
     # Build a single-row DataFrame aligned to X_cols
     # Try to populate missing engineered columns if names match
