@@ -2,6 +2,8 @@ numpy
 pandas
 plotly
 streamlit
-pyulog
 scikit-learn
 matplotlib
+shap
+seaborn
+scikit-optimize
