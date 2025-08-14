@@ -196,7 +196,10 @@ if run_training:
     pipe.fit(X_tr, y_tr)
     y_hat = pipe.predict(X_te)
     r2 = r2_score(y_te, y_hat)
-    rmse = (np.sqrt(mean_squared_error(y_te, y_hat)))
+    try:
+        rmse = float(mean_squared_error(y_te, y_hat, squared=False))
+    except TypeError:
+        rmse = float(np.sqrt(mean_squared_error(y_te, y_hat)))
 
     # Save in session
     st.session_state["trained_pipeline"] = pipe
