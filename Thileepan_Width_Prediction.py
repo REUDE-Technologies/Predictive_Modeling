@@ -258,7 +258,10 @@ if run_training:
     bg = pre.transform(sample_X)
     explainer = shap.TreeExplainer(rf)
     shap_values = explainer.shap_values(pre.transform(sample_X))
-    st.set_option('deprecation.showPyplotGlobalUse', False)
+    try:
+        st.set_option('deprecation.showPyplotGlobalUse', False)
+    except Exception:
+        pass
     shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
     st.pyplot(bbox_inches='tight')
     plt.clf()
