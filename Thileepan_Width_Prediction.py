@@ -1,257 +1,347 @@
-# app.py — Width prediction dashboard (Streamlit)
+# app.py — Width Prediction Dashboard with EDA, Feature Importance, and SHAP
 import streamlit as st
 import pandas as pd
 import numpy as np
+import io
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score, mean_squared_error
+import shap
 
-# -------------------------------
-# Streamlit page settings / style
-# -------------------------------
-st.set_page_config(page_title="Width Prediction Dashboard", layout="wide")
+st.set_page_config(page_title="Width Prediction: ML + Physics + Vision", layout="wide")
 
-st.markdown("""
-    <style>
-        .main-card {
-            background: linear-gradient(135deg, #1d2b64, #f8cdda);
-            border-radius: 12px;
-            padding: 14px;
-            color: white;
-            margin-bottom: 14px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-        }
-        .metric-box {
-            background: rgba(255, 255, 255, 0.10);
-            border-radius: 8px;
-            padding: 10px;
-            text-align: center;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# -------------------- helpers --------------------
+INTERNAL_DIAMETER = {18: 838.0, 21: 514.0}  # µm (adjust if needed)
 
-st.markdown("""
-<div class='main-card'>
-    <h3 style='text-align: center; margin: 0;'>
-        Predictive Control for Silicone Printing via Vision + ML
-    </h3>
-    <p style='text-align:center; margin: 6px 0 0 0;'>Enter process parameters to predict width and view derived physics features.</p>
-</div>
-""", unsafe_allow_html=True)
+def compute_physics_columns(df: pd.DataFrame,
+                            needle_mm_col: str,
+                            speed_col: str,
+                            new_col_name: str,
+                            formula_key: str = "None",
+                            custom_expr: str = ""):
+    """
+    Adds a new column via preset formulas or a custom expression using pandas.eval.
+    Presets expect:
+      - needle diameter in mm (needle_mm_col)
+      - speed in mm/s (speed_col)
+    Preset outputs:
+      - AreaA1 (mm^2)   : pi * d^2 / 4
+      - FlowQ1 (mm^3/s) : Area * speed
+      - ShearS1 (1/s)   : ~ 8 * speed / d
+      - ViscosN1 (Pa·s) : K * (shear)^(n - 1), defaults K=0.9, n=0.06
+    """
+    if new_col_name.strip() == "":
+        return df, None
 
-# -------------------------------
-# Utilities
-# -------------------------------
-def kpa_to_psi(kpa: float) -> float:
-    return float(kpa) / 6.89475729  # 1 psi = 6.89475729 kPa
+    df = df.copy()
 
-def compute_derived(needle_mm: float, speed_mms: float):
-    """Compute area (mm^2), flow (mm^3/s), shear rate (1/s), viscosity (Pa.s) from inputs.
-       Simple rheology proxy (power-law) used for demo; align with your dataset if needed."""
-    # area of circular inlet: pi * d^2 / 4
-    area_mm2 = np.pi * (needle_mm ** 2) / 4.0
-    flow_mm3_s = speed_mms * area_mm2
+    try:
+        if formula_key == "AreaA1 (mm2) = π*d^2/4":
+            df[new_col_name] = np.pi * (df[needle_mm_col].astype(float)**2) / 4.0
 
-    # approximate wall shear rate for capillary flow: ~ 8V/D (here: 4 * v / (d/2) = 8v/d)
-    # v=linear speed (mm/s), d=diameter (mm). Keep units consistent (1/s)
-    shear_rate = 8.0 * speed_mms / max(needle_mm, 1e-6)
+        elif formula_key == "FlowQ1 (mm3/s) = Area * Speed":
+            area = np.pi * (df[needle_mm_col].astype(float)**2) / 4.0
+            df[new_col_name] = area * df[speed_col].astype(float)
 
-    # simple power-law viscosity model: mu = K * gamma^(n-1) (illustrative)
-    n_index = 0.06
-    K_index = 0.9
-    viscosity = K_index * (shear_rate ** (n_index - 1.0))
+        elif formula_key == "ShearS1 (1/s) ≈ 8*Speed/d":
+            d = df[needle_mm_col].astype(float).replace(0, np.nan)
+            df[new_col_name] = 8.0 * df[speed_col].astype(float) / d
+            df[new_col_name] = df[new_col_name].fillna(0.0)
 
-    return round(area_mm2, 4), round(flow_mm3_s, 4), round(shear_rate, 2), round(viscosity, 4)
+        elif formula_key == "ViscosN1 (Pa·s) = K * shear^(n-1)":
+            d = df[needle_mm_col].astype(float).replace(0, np.nan)
+            shear = 8.0 * df[speed_col].astype(float) / d
+            K, n = 0.9, 0.06
+            df[new_col_name] = K * np.power(shear.replace(0, 1e-9), (n - 1.0))
+            df[new_col_name] = df[new_col_name].fillna(df[new_col_name].median())
 
-# --------------------------------
-# Train model (fits once per run)
-# --------------------------------
-@st.cache_resource(show_spinner=True)
-def train_model(data_path: str = "Combined_files.csv"):
-    df = pd.read_csv(data_path)
-    # Drop unnamed index-like columns if present
-    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        elif formula_key == "Custom (pandas.eval)":
+            # Let the user refer to existing columns by name (safe-ish use)
+            # Example: "(Pressure_psi * 0.5) + (Speed_mms * 2) - AreaA1"
+            df[new_col_name] = pd.eval(custom_expr, engine="python", target=df)
 
-    # Harmonize column names used in training
-    rename_map = {
-        'Speed (mm/s)': 'Speed (mm/s)',
-        'Pressure (psi)': 'Pressure (psi)',
-        'Needle Size': 'Needle Size',
-        'Time Period': 'Time Period',
-        'Width (um)': 'Width (um)',
-        'AreaA1 (mm2)': 'AreaA1 (mm2)',
-        'FlowQ1 (mm3/s)': 'FlowQ1 (mm3/s)',
-        'ShearS1 (1/s)': 'ShearS1 (1/s)',
-        'ViscosN1 (PaS)': 'ViscosN1 (PaS)',
-    }
-    df = df.rename(columns=rename_map)
+        else:
+            # No formula selected; just create an empty column?
+            df[new_col_name] = np.nan
 
-    # Required columns
-    base_required = ['Width (um)', 'Needle Size', 'Thivex', 'Material',
-                     'Pressure (psi)', 'Speed (mm/s)', 'Time Period']
-    # Derived/physics columns (if present in your training file)
-    derived_cols = ['AreaA1 (mm2)', 'FlowQ1 (mm3/s)', 'ShearS1 (1/s)', 'ViscosN1 (PaS)']
-    present_derived = [c for c in derived_cols if c in df.columns]
+        return df, None
 
-    # Filter to rows with everything we need
-    df_filtered = df.dropna(subset=base_required).copy()
+    except Exception as e:
+        return df, f"Failed to compute new column: {e}"
 
-    # Build training features; include derived if present
-    features = base_required[1:] + present_derived
-    target = 'Width (um)'
-    X = df_filtered[features]
-    y = df_filtered[target].astype(float)
+def build_model(X: pd.DataFrame, y: pd.Series):
+    """
+    Builds and returns a pipeline (scaler + OHE + RandomForest).
+    """
+    # Auto-detect numeric and categorical
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = [c for c in X.columns if c not in numeric_cols]
 
-    # Train/validation split for more realistic metrics
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-
-    # Set up preprocessing
-    numeric_features = ['Pressure (psi)', 'Speed (mm/s)'] + [c for c in present_derived]
-    categorical_features = ['Material', 'Time Period', 'Thivex', 'Needle Size']
-
-    preprocessor = ColumnTransformer([
-        ('num', StandardScaler(), numeric_features),
-        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
+    pre = ColumnTransformer([
+        ("num", StandardScaler(), numeric_cols),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols),
     ])
 
     model = Pipeline([
-        ('preprocessor', preprocessor),
-        ('model', RandomForestRegressor(
+        ("pre", pre),
+        ("rf", RandomForestRegressor(
             n_estimators=500, random_state=42, n_jobs=-1,
             max_depth=None, min_samples_split=2, min_samples_leaf=1
         ))
     ])
+    return model, numeric_cols, categorical_cols
 
-    model.fit(X_train, y_train)
+def quality_bucket(width_diff):
+    """
+    Classify the print quality by difference (PredWidth - InternalDiameter).
+    """
+    if -50 <= width_diff <= 50:
+        return "✅ Perfect"
+    if -75 <= width_diff <= 75:
+        return "🟡 Acceptable"
+    if width_diff < -75:
+        return "🔵 Over Extrusion"
+    return "🔴 Under Extrusion"
 
-    # Metrics on train and hold-out test split
-    y_hat_train = model.predict(X_train)
-    y_hat_test = model.predict(X_test)
-    r2_train = r2_score(y_train, y_hat_train)
-    # Robust across sklearn versions: prefer squared=False, fallback to manual sqrt
-    try:
-        rmse_train = float(mean_squared_error(y_train, y_hat_train, squared=False))
-    except TypeError:
-        rmse_train = float(np.sqrt(mean_squared_error(y_train, y_hat_train)))
-    r2_test = r2_score(y_test, y_hat_test)
-    try:
-        rmse_test = float(mean_squared_error(y_test, y_hat_test, squared=False))
-    except TypeError:
-        rmse_test = float(np.sqrt(mean_squared_error(y_test, y_hat_test)))
+# -------------------- UI: banner --------------------
+st.markdown("""
+<div style="padding:10px;border-radius:10px;background:linear-gradient(90deg,#0f2027,#203a43,#2c5364);color:#fff;">
+  <h3 style="margin:0;">Vision-based Width Prediction • ML + Physics Features</h3>
+  <p style="margin:6px 0 0 0;">Upload training data, engineer features, train the model, and predict optimal printing outcomes.</p>
+</div>
+""", unsafe_allow_html=True)
+st.write("")
 
-    meta = {
-        "features": features,
-        "numeric_features": numeric_features,
-        "categorical_features": categorical_features,
-        "r2_train": r2_train,
-        "rmse_train": rmse_train,
-        "r2_test": r2_test,
-        "rmse_test": rmse_test
-    }
-    return model, meta
-
-model, meta = train_model()
-
-# -------------------------------
-# Sidebar Inputs (aligned to data)
-# -------------------------------
+# -------------------- Right Sidebar: Data & Modeling --------------------
 with st.sidebar:
-    st.header("📋 Input Parameters")
+    st.header("📂 Data & Modeling")
 
-    # Your dataset commonly uses needles ~ 0.84 mm (18G) / 0.51 mm (21G)
-    needle_str = st.radio("Needle Diameter (mm)", ['0.84', '0.51'], horizontal=True)
-    needle_mm = float(needle_str)
+    uploaded = st.file_uploader("Upload CSV (or leave empty to use 'Combined_files.csv')", type=["csv"])
+    if uploaded:
+        df = pd.read_csv(uploaded)
+    else:
+        # fallback to a default filename in working dir
+        try:
+            df = pd.read_csv("Combined_files.csv")
+        except Exception:
+            st.error("No file uploaded and 'Combined_files.csv' not found.")
+            st.stop()
 
-    material = st.radio("Material", ['DS10', 'DS30', 'SS960'], horizontal=True)
+    st.caption(f"Rows: {len(df)}, Columns: {len(df.columns)}")
 
-    thivex_str = st.radio("Thivex", ['0%', '1%', '2%'], horizontal=True)
-    # Keep percent symbol to match training labels
-    thivex = thivex_str
+    st.subheader("Select Training Columns")
+    all_cols = df.columns.tolist()
+    y_col = st.selectbox("Target (y)", options=all_cols, index=all_cols.index('Width (um)') if 'Width (um)' in all_cols else 0)
+    X_cols = st.multiselect("Features (X)", options=[c for c in all_cols if c != y_col],
+                            default=[c for c in ['Speed (mm/s)','Pressure (psi)','Material','Thivex','Time Period','Needle Size',
+                                                 'AreaA1 (mm2)','FlowQ1 (mm3/s)','ShearS1 (1/s)','ViscosN1 (PaS)']
+                                     if c in all_cols])
 
-    time_label = st.selectbox(
-        "Time Period",
-        ["Phase1: First 30 mins", "Phase2: 30 mins to 60 min", "Phase3: After 60 mins"]
-    )
+    st.divider()
+    st.subheader("➕ Add New Column by Formula")
+    # The user must specify which columns hold physical quantities
+    needle_mm_col = st.selectbox("Column: Needle Diameter (mm) or map it", options=all_cols,
+                                 index=all_cols.index('Needle dia (mm)') if 'Needle dia (mm)' in all_cols else 0)
+    speed_col = st.selectbox("Column: Speed (mm/s)", options=all_cols,
+                             index=(all_cols.index('Speed (mm/s)') if 'Speed (mm/s)' in all_cols else 0))
+    new_col_name = st.text_input("New Column Name (e.g., AreaA1 (mm2))", value="")
+    formula_choice = st.selectbox("Formula",
+                                  options=["None",
+                                           "AreaA1 (mm2) = π*d^2/4",
+                                           "FlowQ1 (mm3/s) = Area * Speed",
+                                           "ShearS1 (1/s) ≈ 8*Speed/d",
+                                           "ViscosN1 (Pa·s) = K * shear^(n-1)",
+                                           "Custom (pandas.eval)"])
+    custom_expr = st.text_input("Custom expression (optional, uses column names)", value="")
 
-    # Your model trains on psi, but many operators think in kPa → convert
-    pressure_kpa = st.number_input("Pressure (kPa)", min_value=300, max_value=750, value=448, step=5)
-    pressure_psi = round(kpa_to_psi(pressure_kpa), 3)
+    add_col_clicked = st.button("Add Column")
 
-    speed_mms = st.number_input("Printing Speed (mm/s)", min_value=10, max_value=70, value=20, step=1)
+    if add_col_clicked and new_col_name.strip() != "":
+        df, err = compute_physics_columns(df, needle_mm_col, speed_col, new_col_name, formula_choice, custom_expr)
+        if err:
+            st.error(err)
+        else:
+            st.success(f"Added '{new_col_name}' to the dataframe.")
+            # Auto-include the new column if not in X yet
+            if new_col_name not in X_cols:
+                X_cols.append(new_col_name)
 
-    pattern = st.text_input("Print Pattern (optional)", "Nested Polygon in Circle")
+    st.divider()
+    run_training = st.button("Train & Analyze")
 
-    submitted = st.button("🔍 Predict Width")
+# -------------------- Train + EDA center area --------------------
+if run_training:
+    # Clean + subset
+    miss_cols = [c for c in [y_col] + X_cols if c not in df.columns]
+    if miss_cols:
+        st.error(f"Selected columns not found in data: {miss_cols}")
+        st.stop()
 
-# -------------------------------
-# Prediction + UI
-# -------------------------------
-if submitted:
-    # Compute physics features (used if your model was trained with them)
-    area_mm2, flow_mm3_s, shear_rate, viscosity = compute_derived(needle_mm, speed_mms)
+    data = df.dropna(subset=[y_col] + X_cols).copy()
+    if data.empty:
+        st.error("No rows left after dropping NA in selected columns.")
+        st.stop()
 
-    # Prepare an input row aligned to training feature names
-    row = {
-        'Needle Size': 18 if abs(needle_mm - 0.84) < 1e-3 else 21,  # map diameter to your dataset's "Needle Size"
-        'Thivex': thivex,                       # data uses strings "0", "1", "2" or similar
-        'Material': material,
-        'Pressure (psi)': pressure_psi,
-        'Speed (mm/s)': speed_mms,
-        'Time Period': time_label
-    }
+    X = data[X_cols]
+    y = data[y_col].astype(float)
 
-    # If your training included derived columns, pass the computed values
-    if 'AreaA1 (mm2)' in meta['features']:       row['AreaA1 (mm2)'] = area_mm2
-    if 'FlowQ1 (mm3/s)' in meta['features']:     row['FlowQ1 (mm3/s)'] = flow_mm3_s
-    if 'ShearS1 (1/s)' in meta['features']:      row['ShearS1 (1/s)'] = shear_rate
-    if 'ViscosN1 (PaS)' in meta['features']:     row['ViscosN1 (PaS)'] = viscosity
+    # Train/test split for quick metrics
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
+    pipe, num_cols, cat_cols = build_model(X_tr, y_tr)
+    pipe.fit(X_tr, y_tr)
+    y_hat = pipe.predict(X_te)
+    r2 = r2_score(y_te, y_hat)
+    rmse = mean_squared_error(y_te, y_hat, squared=False)
 
-    input_df = pd.DataFrame([row])
-    pred_width_um = float(model.predict(input_df)[0])
+    # Save in session
+    st.session_state["trained_pipeline"] = pipe
+    st.session_state["X_cols"] = X_cols
+    st.session_state["y_col"] = y_col
+    st.session_state["numeric"] = num_cols
+    st.session_state["categorical"] = cat_cols
+    st.session_state["data"] = data
 
-    # (Optional) difference to internal diameter in µm if you want to display it:
-    # map 18G≈0.838 mm ≈ 838 µm; 21G≈0.514 mm ≈ 514 µm (adjust to your exact hardware)
-    needle_um = 838 if row['Needle Size'] == 18 else 514
-    difference = abs(needle_um - pred_width_um)
+    # ---- Layout
+    m1, m2 = st.columns(2)
+    with m1:
+        st.metric("R² (test)", f"{r2:.3f}")
+    with m2:
+        st.metric("RMSE (test, µm)", f"{rmse:.1f}")
 
-    # -------- Metrics row --------
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.markdown(f"<div class='metric-box'><h5>Inlet Area (mm²)</h5><h3>{area_mm2}</h3></div>", unsafe_allow_html=True)
-    c2.markdown(f"<div class='metric-box'><h5>Flow Rate (mm³/s)</h5><h3>{flow_mm3_s}</h3></div>", unsafe_allow_html=True)
-    c3.markdown(f"<div class='metric-box'><h5>Shear Rate (1/s)</h5><h3>{shear_rate}</h3></div>", unsafe_allow_html=True)
-    c4.markdown(f"<div class='metric-box'><h5>Viscosity (Pa·s)</h5><h3>{viscosity}</h3></div>", unsafe_allow_html=True)
-    c5.markdown(
-        f"<div class='metric-box'>"
-        f"<h5>Model</h5>"
-        f"<h4>Train: R² {meta['r2_train']:.3f} | RMSE {meta['rmse_train']:.1f}</h4>"
-        f"<h4>Test: R² {meta['r2_test']:.3f} | RMSE {meta['rmse_test']:.1f}</h4>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
+    st.markdown("### 📈 Pearson Correlation Heatmap (numeric features only)")
+    num_for_corr = data[X_cols + [y_col]].select_dtypes(include=[np.number])
+    if num_for_corr.shape[1] >= 2:
+        plt.figure(figsize=(6.8, 5.2))
+        corr = num_for_corr.corr()
+        sns.heatmap(corr, annot=False, cmap="coolwarm", center=0)
+        st.pyplot(plt.gcf())
+        plt.close()
+    else:
+        st.info("Not enough numeric columns for a correlation heatmap.")
 
-    st.markdown("---")
-    left, right = st.columns([1,1])
-    with left:
-        st.subheader("🔮 Predicted Width (µm)")
-        st.markdown(f"### {pred_width_um:.1f} µm")
+    # ---- Feature importance (using RF model inside pipeline)
+    st.markdown("### 🌲 Feature Importance (Random Forest)")
+    # Extract trained RF and one-hot feature names
+    rf = pipe.named_steps["rf"]
+    pre = pipe.named_steps["pre"]
+    ohe = pre.named_transformers_["cat"]
+    # build full feature names: scaled numeric + OHE cats
+    num_names = num_cols
+    cat_expanded = []
+    if hasattr(ohe, "get_feature_names_out"):
+        cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
+    full_names = num_names + cat_expanded
+    importances = rf.feature_importances_
+    fi = pd.DataFrame({"feature": full_names, "importance": importances}).sort_values("importance", ascending=False)
+    st.dataframe(fi.head(30), use_container_width=True)
 
-        st.caption("Difference to internal diameter (heuristic mapping 18→838 µm, 21→514 µm)")
-        st.write(f"**|ID − Width| = {difference:.1f} µm**")
+    plt.figure(figsize=(7.2, 4.8))
+    sns.barplot(x="importance", y="feature", data=fi.head(20))
+    plt.tight_layout()
+    st.pyplot(plt.gcf())
+    plt.close()
 
-        st.write("**Inputs used**")
+    # ---- SHAP summary
+    st.markdown("### 🔎 SHAP Summary (top 100 samples)")
+    # Build a small background set
+    sample_X = X_tr.sample(min(100, len(X_tr)), random_state=42)
+    # Transform sample through preprocessor to get model input
+    # For tree models, we can use TreeExplainer directly on pipeline's rf by passing preprocessed array
+    bg = pre.transform(sample_X)
+    explainer = shap.TreeExplainer(rf)
+    shap_values = explainer.shap_values(pre.transform(sample_X))
+    st.set_option('deprecation.showPyplotGlobalUse', False)
+    shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
+    st.pyplot(bbox_inches='tight')
+    plt.clf()
+
+# -------------------- Right Sidebar: Prediction Panel --------------------
+with st.sidebar:
+    st.divider()
+    st.header("🎯 Predict Width")
+
+    # Inputs
+    needle_size = st.selectbox("Needle Size (Gauge)", options=[18, 21], index=0)
+    material_in = st.selectbox("Material", options=sorted(df['Material'].astype(str).unique()) if 'Material' in df.columns else ["DS10","DS30","SS960"])
+    thivex_in = st.selectbox("Thivex", options=sorted(df['Thivex'].astype(str).unique()) if 'Thivex' in df.columns else ["0","1","2"])
+    time_in = st.selectbox("Time Period", options=sorted(df['Time Period'].astype(str).unique()) if 'Time Period' in df.columns else ["Phase1: First 30 mins","Phase2: 30 mins to 60 min","Phase3: After 60 mins"])
+    press_in = st.number_input("Pressure (psi)", min_value=20.0, max_value=200.0, value=85.0, step=1.0)
+    speed_in = st.number_input("Speed (mm/s)", min_value=5.0, max_value=4000.0, value=1200.0, step=10.0)
+
+    pred_btn = st.button("🔮 Predict Line Width")
+
+# -------------------- Run prediction --------------------
+if pred_btn:
+    if "trained_pipeline" not in st.session_state:
+        st.error("Please train the model first (upload/select columns and click 'Train & Analyze').")
+        st.stop()
+
+    pipe = st.session_state["trained_pipeline"]
+    X_cols = st.session_state["X_cols"]
+
+    # Build a single-row DataFrame aligned to X_cols
+    # Try to populate missing engineered columns if names match
+    row = {}
+    for c in X_cols:
+        if c == 'Needle Size':
+            row[c] = needle_size
+        elif c == 'Material':
+            row[c] = material_in
+        elif c == 'Thivex':
+            row[c] = thivex_in
+        elif c == 'Time Period':
+            row[c] = time_in
+        elif c == 'Pressure (psi)':
+            row[c] = press_in
+        elif c == 'Speed (mm/s)':
+            row[c] = speed_in
+        else:
+            # Try to compute physics columns if names match common presets
+            if c.lower().startswith("areaa1"):
+                # Need an approximate needle diameter (mm) for area
+                d_mm = 0.838 if needle_size == 18 else 0.514
+                row[c] = np.pi * (d_mm**2) / 4.0
+            elif c.lower().startswith("flowq1"):
+                d_mm = 0.838 if needle_size == 18 else 0.514
+                area = np.pi * (d_mm**2) / 4.0
+                row[c] = area * float(speed_in)
+            elif c.lower().startswith("shears1"):
+                d_mm = 0.838 if needle_size == 18 else 0.514
+                row[c] = 8.0 * float(speed_in) / max(d_mm, 1e-6)
+            elif c.lower().startswith("viscosn1"):
+                d_mm = 0.838 if needle_size == 18 else 0.514
+                shear = 8.0 * float(speed_in) / max(d_mm, 1e-6)
+                K, n = 0.9, 0.06
+                row[c] = K * (shear ** (n - 1.0))
+            else:
+                # If column is categorical and exists in df, fallback to first mode
+                if c in df.columns:
+                    row[c] = df[c].iloc[0]
+                else:
+                    row[c] = 0.0
+
+    x_row = pd.DataFrame([row], columns=X_cols)
+    pred_width = float(pipe.predict(x_row)[0])  # µm
+
+    # Classification by difference
+    internal_um = INTERNAL_DIAMETER.get(needle_size, 0.0)
+    width_diff = pred_width - internal_um
+    verdict = quality_bucket(width_diff)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Predicted Width (µm)", f"{pred_width:.1f}")
+    c2.metric("Internal ID (µm)", f"{internal_um:.0f}")
+    c3.metric("Width Difference (µm)", f"{width_diff:+.1f}")
+
+    st.success(f"Print Quality: **{verdict}**")
+    with st.expander("Show input row sent to model"):
         st.json(row)
 
-    with right:
-        st.subheader("ℹ️ Notes")
-        st.write("- Pressure converted from kPa → psi for model consistency.")
-        st.write("- Physics-derived features computed from your inputs.")
-        st.write("- If your training file **doesn’t** contain the derived columns, the model will still run using base features.")
-
-else:
-    st.info("Enter your parameters on the left and click **Predict Width**.")
-
+# -------------------- footer --------------------
+st.write("")
+st.caption("Tip: use the formula tool to add Area/Flow/Shear/Viscosity columns if your CSV lacks them. Then retrain for better accuracy.")
