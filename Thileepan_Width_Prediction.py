@@ -284,7 +284,8 @@ if pred_btn:
         st.error("Please train the model first (upload/select columns and click 'Train & Analyze').")
         st.stop()
 
-    pipe = st.session_state["trained_pipeline"]
+    # pipe = st.session_state["trained_pipeline"]
+    pipe = pipe.fit(X, y)
     X_cols = st.session_state["X_cols"]
 
     # Build a single-row DataFrame aligned to X_cols
