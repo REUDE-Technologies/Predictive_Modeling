@@ -263,8 +263,9 @@ if run_training:
     except Exception:
         pass
     shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
-    st.pyplot(bbox_inches='tight')
-    plt.clf()
+    fig = plt.gcf()
+    st.pyplot(fig, bbox_inches='tight')
+    plt.close(fig)
 
 # -------------------- Right Sidebar: Prediction Panel --------------------
 with st.sidebar:
