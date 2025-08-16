@@ -1182,7 +1182,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 st.info("No data available to display. Please upload and select a file first.")
         
         with col2:
-            st.markdown("#### ➕ Add New Column by Formula", help="How to use this feature:\n• Select the column containing needle diameter values (in mm)\n• Select the column containing speed values (in mm/s)\n• Choose a formula or enter a custom expression\n• Enter a name for the new column\n• Click 'Add Column' to create the calculated column\n• After adding columns, retrain your model for better accuracy")
+            st.markdown("#### ➕ Add New Column by Formula")
             # The user must specify which columns hold physical quantities
             
             if not current_all_cols:
