@@ -1,3 +1,4 @@
+#type: ignore
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -1181,7 +1182,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 st.info("No data available to display. Please upload and select a file first.")
         
         with col2:
-            st.markdown("#### ➕ Add New Column by Formula")
+            st.markdown("#### ➕ Add New Column by Formula", help="How to use this feature:\n• Select the column containing needle diameter values (in mm)\n• Select the column containing speed values (in mm/s)\n• Choose a formula or enter a custom expression\n• Enter a name for the new column\n• Click 'Add Column' to create the calculated column\n• After adding columns, retrain your model for better accuracy")
             # The user must specify which columns hold physical quantities
             
             if not current_all_cols:
@@ -1249,21 +1250,6 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             st.rerun()  # Refresh to show updated data
                     else:
                         st.error("No data available to modify.")
-                
-                # Add helpful information about the feature
-                st.markdown("""
-                <div style="background-color: #f0f8ff; border-left: 4px solid #007bff; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                    <h6 style="margin: 0 0 5px 0; color: #007bff;">💡 How to use this feature:</h6>
-                    <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
-                        <li>Select the column containing needle diameter values (in mm)</li>
-                        <li>Select the column containing speed values (in mm/s)</li>
-                        <li>Choose a formula or enter a custom expression</li>
-                        <li>Enter a name for the new column</li>
-                        <li>Click "Add Column" to create the calculated column</li>
-                        <li>After adding columns, retrain your model for better accuracy</li>
-                    </ul>
-                </div>
-                """, unsafe_allow_html=True)
         
         st.markdown('<p style="text-align: center; color: #666; font-size: 0.9em; margin-top: 10px;">Tip: use the formula tool to add Area/Flow/Shear/Viscosity columns if your CSV lacks them. Then retrain for better accuracy.</p>', unsafe_allow_html=True)
 
