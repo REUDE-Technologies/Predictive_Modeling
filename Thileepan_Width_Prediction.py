@@ -10,7 +10,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error
-# import sklearn.exceptions
+import sklearn.exceptions
 import shap
 import tempfile
 import os
