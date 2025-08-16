@@ -1,3 +1,4 @@
+#type: ignore
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -1142,76 +1143,129 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
         # Initialize session state for data tab
         if 'data_tab_formula_inputs' not in st.session_state:
             st.session_state.data_tab_formula_inputs = {
-                'needle_mm_col': 'Needle dia (mm)' if 'Needle dia (mm)' in all_cols else all_cols[0] if all_cols else '',
-                'speed_col': 'Speed (mm/s)' if 'Speed (mm/s)' in all_cols else all_cols[0] if all_cols else '',
+                'needle_mm_col': '',
+                'speed_col': '',
                 'new_col_name': '',
                 'formula_choice': 'None',
                 'custom_expr': ''
             }
         
+        # Get data from session state or local variables
+        current_df = None
+        current_all_cols = []
+        current_X_cols = []
+        
+        if 'data' in st.session_state:
+            current_df = st.session_state['data']
+            current_all_cols = current_df.columns.tolist()
+        elif 'df' in locals():
+            current_df = df
+            current_all_cols = df.columns.tolist()
+        
+        if 'X_cols' in st.session_state:
+            current_X_cols = st.session_state['X_cols']
+        elif 'X_cols' in locals():
+            current_X_cols = X_cols
+        
+        # Initialize session state with proper defaults if we have data
+        if current_all_cols and not st.session_state.data_tab_formula_inputs['needle_mm_col']:
+            st.session_state.data_tab_formula_inputs['needle_mm_col'] = 'Needle dia (mm)' if 'Needle dia (mm)' in current_all_cols else current_all_cols[0]
+            st.session_state.data_tab_formula_inputs['speed_col'] = 'Speed (mm/s)' if 'Speed (mm/s)' in current_all_cols else current_all_cols[0]
+        
         col1, col2 = st.columns([3.1, 1.1])
         
         with col1:
             st.markdown("#### 📋 Data Table")
-            if 'df' in locals():
-                st.dataframe(df, use_container_width=True, height=500)
+            if current_df is not None:
+                st.dataframe(current_df, use_container_width=True, height=500)
             else:
-                st.info("No data available to display.")
+                st.info("No data available to display. Please upload and select a file first.")
         
         with col2:
             st.markdown("#### ➕ Add New Column by Formula")
             # The user must specify which columns hold physical quantities
             
-            # Get current values from session state
-            current_inputs = st.session_state.data_tab_formula_inputs
-            
-            needle_mm_col = st.selectbox("Column: Needle Diameter (mm) or map it", options=all_cols,
-                                         index=all_cols.index(current_inputs['needle_mm_col']) if current_inputs['needle_mm_col'] in all_cols else 0,
-                                         key="data_needle_mm_col")
-            speed_col = st.selectbox("Column: Speed (mm/s)", options=all_cols,
-                                     index=all_cols.index(current_inputs['speed_col']) if current_inputs['speed_col'] in all_cols else 0,
-                                     key="data_speed_col")
-            new_col_name = st.text_input("New Column Name (e.g., AreaA1 (mm2))", 
-                                        value=current_inputs['new_col_name'],
-                                        key="data_new_col_name")
-            formula_choice = st.selectbox("Formula",
-                                          options=["None",
-                                                   "AreaA1 (mm2) = π*d^2/4",
-                                                   "FlowQ1 (mm3/s) = Area * Speed",
-                                                   "ShearS1 (1/s) ≈ 8*Speed/d",
-                                                   "ViscosN1 (Pa·s) = K * shear^(n-1)",
-                                                   "Custom (pandas.eval)"],
-                                          index=["None",
-                                                 "AreaA1 (mm2) = π*d^2/4",
-                                                 "FlowQ1 (mm3/s) = Area * Speed",
-                                                 "ShearS1 (1/s) ≈ 8*Speed/d",
-                                                 "ViscosN1 (Pa·s) = K * shear^(n-1)",
-                                                 "Custom (pandas.eval)"].index(current_inputs['formula_choice']),
-                                          key="data_formula_choice")
-            custom_expr = st.text_input("Custom expression (optional, uses column names)", 
-                                       value=current_inputs['custom_expr'],
-                                       key="data_custom_expr")
+            if not current_all_cols:
+                st.info("No data available. Please upload and select a file first.")
+            else:
+                # Get current values from session state
+                current_inputs = st.session_state.data_tab_formula_inputs
+                
+                needle_mm_col = st.selectbox("Column: Needle Diameter (mm) or map it", options=current_all_cols,
+                                             index=current_all_cols.index(current_inputs['needle_mm_col']) if current_inputs['needle_mm_col'] in current_all_cols else 0,
+                                             key="data_needle_mm_col")
+                speed_col = st.selectbox("Column: Speed (mm/s)", options=current_all_cols,
+                                         index=current_all_cols.index(current_inputs['speed_col']) if current_inputs['speed_col'] in current_all_cols else 0,
+                                         key="data_speed_col")
+                new_col_name = st.text_input("New Column Name (e.g., AreaA1 (mm2))", 
+                                            value=current_inputs['new_col_name'],
+                                            key="data_new_col_name")
+                formula_choice = st.selectbox("Formula",
+                                              options=["None",
+                                                       "AreaA1 (mm2) = π*d^2/4",
+                                                       "FlowQ1 (mm3/s) = Area * Speed",
+                                                       "ShearS1 (1/s) ≈ 8*Speed/d",
+                                                       "ViscosN1 (Pa·s) = K * shear^(n-1)",
+                                                       "Custom (pandas.eval)"],
+                                              index=["None",
+                                                     "AreaA1 (mm2) = π*d^2/4",
+                                                     "FlowQ1 (mm3/s) = Area * Speed",
+                                                     "ShearS1 (1/s) ≈ 8*Speed/d",
+                                                     "ViscosN1 (Pa·s) = K * shear^(n-1)",
+                                                     "Custom (pandas.eval)"].index(current_inputs['formula_choice']),
+                                              key="data_formula_choice")
+                custom_expr = st.text_input("Custom expression (optional, uses column names)", 
+                                           value=current_inputs['custom_expr'],
+                                           key="data_custom_expr")
 
-            add_col_clicked = st.button("Add Column")
+                add_col_clicked = st.button("Add Column")
 
-            if add_col_clicked and new_col_name.strip() != "":
-                df, err = compute_physics_columns(df, needle_mm_col, speed_col, new_col_name, formula_choice, custom_expr)
-                if err:
-                    st.error(err)
-                else:
-                    st.success(f"Added '{new_col_name}' to the dataframe.")
-                    # Auto-include the new column if not in X yet
-                    if new_col_name not in X_cols:
-                        X_cols.append(new_col_name)
-                    
-                    # Update session state with current inputs
-                    st.session_state.data_tab_formula_inputs = {
-                        'needle_mm_col': needle_mm_col,
-                        'speed_col': speed_col,
-                        'new_col_name': new_col_name,
-                        'formula_choice': formula_choice,
-                        'custom_expr': custom_expr
-                    }
+                if add_col_clicked and new_col_name.strip() != "":
+                    if current_df is not None:
+                        updated_df, err = compute_physics_columns(current_df, needle_mm_col, speed_col, new_col_name, formula_choice, custom_expr)
+                        if err:
+                            st.error(err)
+                        else:
+                            st.success(f"Added '{new_col_name}' to the dataframe.")
+                            
+                            # Update the dataframe in session state
+                            if 'data' in st.session_state:
+                                st.session_state['data'] = updated_df
+                            
+                            # Auto-include the new column if not in X_cols yet
+                            if new_col_name not in current_X_cols:
+                                current_X_cols.append(new_col_name)
+                                if 'X_cols' in st.session_state:
+                                    st.session_state['X_cols'] = current_X_cols
+                            
+                            # Update session state with current inputs
+                            st.session_state.data_tab_formula_inputs = {
+                                'needle_mm_col': needle_mm_col,
+                                'speed_col': speed_col,
+                                'new_col_name': new_col_name,
+                                'formula_choice': formula_choice,
+                                'custom_expr': custom_expr
+                            }
+                            
+                            st.rerun()  # Refresh to show updated data
+                    else:
+                        st.error("No data available to modify.")
+                
+                # Add helpful information about the feature
+                st.markdown("""
+                <div style="background-color: #f0f8ff; border-left: 4px solid #007bff; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                    <h6 style="margin: 0 0 5px 0; color: #007bff;">💡 How to use this feature:</h6>
+                    <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
+                        <li>Select the column containing needle diameter values (in mm)</li>
+                        <li>Select the column containing speed values (in mm/s)</li>
+                        <li>Choose a formula or enter a custom expression</li>
+                        <li>Enter a name for the new column</li>
+                        <li>Click "Add Column" to create the calculated column</li>
+                        <li>After adding columns, retrain your model for better accuracy</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+        
         st.markdown('<p style="text-align: center; color: #666; font-size: 0.9em; margin-top: 10px;">Tip: use the formula tool to add Area/Flow/Shear/Viscosity columns if your CSV lacks them. Then retrain for better accuracy.</p>', unsafe_allow_html=True)
 
     with tab3:
