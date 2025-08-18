@@ -1,4 +1,3 @@
-#type: ignore
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -982,7 +981,13 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 # build full feature names: scaled numeric + OHE cats
                 num_names = num_cols
                 cat_expanded = []
-                if hasattr(ohe, "get_feature_names_out"):
+                # Only attempt to read encoder feature names if we actually
+                # have categorical columns and the encoder has been fitted
+                if (
+                    cat_cols
+                    and hasattr(ohe, "get_feature_names_out")
+                    and hasattr(ohe, "categories_")
+                ):
                     cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
                 full_names = num_names + cat_expanded
                 importances = rf.feature_importances_
@@ -1098,7 +1103,11 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     # build full feature names: scaled numeric + OHE cats
                     num_names = num_cols
                     cat_expanded = []
-                    if hasattr(ohe, "get_feature_names_out"):
+                    if (
+                        cat_cols
+                        and hasattr(ohe, "get_feature_names_out")
+                        and hasattr(ohe, "categories_")
+                    ):
                         cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
                     full_names = num_names + cat_expanded
                     importances = rf.feature_importances_
