@@ -197,9 +197,28 @@ def build_model(X: pd.DataFrame, y: pd.Series):
     """
     Builds and returns a pipeline (scaler + OHE + RandomForest).
     """
-    # Auto-detect numeric and categorical
-    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
-    categorical_cols = [c for c in X.columns if c not in numeric_cols]
+    # Create a copy to avoid modifying original data
+    X_processed = X.copy()
+    
+    # Preprocess specific categorical columns to numeric in background
+    if 'Thivex' in X_processed.columns:
+        X_processed['Thivex'] = X_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+    
+    if 'Material' in X_processed.columns:
+        material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+        X_processed['Material'] = X_processed['Material'].map(material_map)
+    
+    if 'Time Period' in X_processed.columns:
+        time_map = {
+            'Phase1: First 30 mins': 1,
+            'Phase2: 30 mins to 60 min': 2, 
+            'Phase3: After 60 mins': 3
+        }
+        X_processed['Time Period'] = X_processed['Time Period'].map(time_map)
+    
+    # Auto-detect numeric and categorical after preprocessing
+    numeric_cols = X_processed.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = [c for c in X_processed.columns if c not in numeric_cols]
 
     pre = ColumnTransformer([
         ("num", StandardScaler(), numeric_cols),
@@ -213,7 +232,7 @@ def build_model(X: pd.DataFrame, y: pd.Series):
             max_depth=None, min_samples_split=2, min_samples_leaf=1
         ))
     ])
-    return model, numeric_cols, categorical_cols
+    return model, numeric_cols, categorical_cols, X_processed
 
 def quality_bucket(width_diff):
     """
@@ -885,9 +904,25 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
 
             # Train/test split for quick metrics
             X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
-            pipe, num_cols, cat_cols = build_model(X_tr, y_tr)
-            pipe.fit(X_tr, y_tr)
-            y_hat = pipe.predict(X_te)
+            pipe, num_cols, cat_cols, X_processed = build_model(X_tr, y_tr)
+            pipe.fit(X_processed, y_tr)
+            
+            # Process test data the same way as training data
+            X_te_processed = X_te.copy()
+            if 'Thivex' in X_te_processed.columns:
+                X_te_processed['Thivex'] = X_te_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+            if 'Material' in X_te_processed.columns:
+                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                X_te_processed['Material'] = X_te_processed['Material'].map(material_map)
+            if 'Time Period' in X_te_processed.columns:
+                time_map = {
+                    'Phase1: First 30 mins': 1,
+                    'Phase2: 30 mins to 60 min': 2, 
+                    'Phase3: After 60 mins': 3
+                }
+                X_te_processed['Time Period'] = X_te_processed['Time Period'].map(time_map)
+            
+            y_hat = pipe.predict(X_te_processed)
             r2 = r2_score(y_te, y_hat)
             try:
                 rmse = float(mean_squared_error(y_te, y_hat, squared=False))
@@ -909,31 +944,33 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 'y_col': y_col,
                 'num_cols': num_cols,
                 'cat_cols': cat_cols,
-                'pipe': pipe
+                'pipe': pipe,
+                'X_processed': X_processed,
+                'y_vector': y
             }
             st.session_state.plot_model_metrics = {
                 'r2': r2,
                 'rmse': rmse
             }
 
-            # # ---- Enhanced Model Performance Metrics ----
-            # st.markdown("""
-            # <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; margin: 20px 0;">
-            #     <h2 style="color: white; text-align: center; margin: 0 0 20px 0;">🎯 Model Performance Dashboard</h2>
-            #     <div style="display: flex; justify-content: space-around; align-items: center;">
-            #         <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; min-width: 150px;">
-            #             <h3 style="color: white; margin: 0; font-size: 14px;">R² Score (Test)</h3>
-            #             <p style="color: white; font-size: 24px; font-weight: bold; margin: 5px 0;">{:.3f}</p>
-            #             <p style="color: #e0e0e0; font-size: 12px; margin: 0;">Coefficient of Determination</p>
-            #         </div>
-            #         <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; min-width: 150px;">
-            #             <h3 style="color: white; margin: 0; font-size: 14px;">RMSE (Test)</h3>
-            #             <p style="color: white; font-size: 24px; font-weight: bold; margin: 5px 0;">{:.1f} µm</p>
-            #             <p style="color: #e0e0e0; font-size: 12px; margin: 0;">Root Mean Square Error</p>
-            #         </div>
-            #     </div>
-            # </div>
-            # """.format(r2, rmse), unsafe_allow_html=True)
+            # ---- Enhanced Model Performance Metrics ----
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; margin: 20px 0;">
+                <h2 style="color: white; text-align: center; margin: 0 0 20px 0;">🎯 Model Performance Dashboard</h2>
+                <div style="display: flex; justify-content: space-around; align-items: center;">
+                    <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; min-width: 150px;">
+                        <h3 style="color: white; margin: 0; font-size: 14px;">R² Score (Test)</h3>
+                        <p style="color: white; font-size: 24px; font-weight: bold; margin: 5px 0;">{:.3f}</p>
+                        <p style="color: #e0e0e0; font-size: 12px; margin: 0;">Coefficient of Determination</p>
+                    </div>
+                    <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; min-width: 150px;">
+                        <h3 style="color: white; margin: 0; font-size: 14px;">RMSE (Test)</h3>
+                        <p style="color: white; font-size: 24px; font-weight: bold; margin: 5px 0;">{:.1f} µm</p>
+                        <p style="color: #e0e0e0; font-size: 12px; margin: 0;">Root Mean Square Error</p>
+                    </div>
+                </div>
+            </div>
+            """.format(r2, rmse), unsafe_allow_html=True)
             
             # Additional performance insights
             col1, col2, col3 = st.columns(3)
@@ -953,7 +990,11 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
             with col1:
                 # Plot 1: Correlation Heatmap
                 st.markdown("#### 📈 Correlation Heatmap")
-                num_for_corr = data[X_cols + [y_col]].select_dtypes(include=[np.number])
+                # Use processed data for correlation (includes converted categorical variables)
+                # Add target variable to processed features for correlation analysis
+                processed_for_corr = X_processed[X_cols].copy()
+                processed_for_corr[y_col] = y  # Add target variable back
+                num_for_corr = processed_for_corr.select_dtypes(include=[np.number])
                 if num_for_corr.shape[1] >= 2:
                     plt.figure(figsize=(6, 5))
                     corr = num_for_corr.corr()
@@ -1001,8 +1042,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
             with col4:
                 # Plot 4: SHAP Summary
                 st.markdown("#### 🔎 SHAP Summary")
-                # Build a small background set
-                sample_X = X_tr.sample(min(100, len(X_tr)), random_state=42)
+                # Build a small background set using processed data
+                sample_X = X_processed.sample(min(100, len(X_processed)), random_state=42)
                 # Transform sample through preprocessor to get model input
                 bg = pre.transform(sample_X)
                 explainer = shap.TreeExplainer(rf)
@@ -1025,20 +1066,23 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 plt.tight_layout()
                 st.pyplot(plt.gcf())
                 plt.close()
-        else:
-            # Display saved results if available (when page reruns)
-            if st.session_state.plot_training_results is not None and st.session_state.plot_model_metrics is not None:
-                # Restore saved data
-                data = st.session_state.plot_training_results['data']
-                X_cols = st.session_state.plot_training_results['X_cols']
-                y_col = st.session_state.plot_training_results['y_col']
-                num_cols = st.session_state.plot_training_results['num_cols']
-                cat_cols = st.session_state.plot_training_results['cat_cols']
-                pipe = st.session_state.plot_training_results['pipe']
-                r2 = st.session_state.plot_model_metrics['r2']
-                rmse = st.session_state.plot_model_metrics['rmse']
-                
-                # Display saved model performance metrics
+
+        elif st.session_state.plot_training_results:
+            # Render last trained results so Plot tab persists after Predict
+            saved = st.session_state.plot_training_results
+            data = saved['data']
+            X_cols = saved['X_cols']
+            y_col = saved['y_col']
+            num_cols = saved['num_cols']
+            cat_cols = saved['cat_cols']
+            pipe = saved['pipe']
+            X_processed = saved['X_processed']
+            y = saved['y_vector']
+
+            metrics = st.session_state.get('plot_model_metrics')
+            if metrics:
+                r2 = metrics.get('r2', float('nan'))
+                rmse = metrics.get('rmse', float('nan'))
                 st.markdown("""
                 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; margin: 20px 0;">
                     <h2 style="color: white; text-align: center; margin: 0 0 20px 0;">🎯 Model Performance Dashboard</h2>
@@ -1056,8 +1100,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     </div>
                 </div>
                 """.format(r2, rmse), unsafe_allow_html=True)
-                
-                # Additional performance insights
+
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.info(f"📊 **Model Quality**: {'Excellent' if r2 > 0.9 else 'Good' if r2 > 0.7 else 'Fair'}")
@@ -1066,88 +1109,70 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 with col3:
                     st.info(f"📈 **Reliability**: {'Very High' if r2 > 0.95 else 'High' if r2 > 0.85 else 'Moderate'}")
 
-                # Display saved plots
-                st.markdown("### 📊 Model Analysis Dashboard")
-                
-                # Create 2x2 grid
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Plot 1: Correlation Heatmap
-                    st.markdown("#### 📈 Correlation Heatmap")
-                    num_for_corr = data[X_cols + [y_col]].select_dtypes(include=[np.number])
-                    if num_for_corr.shape[1] >= 2:
-                        plt.figure(figsize=(6, 5))
-                        corr = num_for_corr.corr()
-                        # Create heatmap with annotations
-                        sns.heatmap(corr, 
-                                   annot=True,  # Show values
-                                   fmt='.2f',   # Format to 2 decimal places
-                                   cmap="coolwarm", 
-                                   center=0,
-                                   square=True,  # Make it square
-                                   cbar_kws={"shrink": .8},
-                                   annot_kws={"size": 8})  # Smaller font for annotations
-                        plt.tight_layout()
-                        st.pyplot(plt.gcf())
-                        plt.close()
-                    else:
-                        st.info("Not enough numeric columns for correlation heatmap.")
-                
-                with col2:
-                    # Plot 2: Feature Importance Table
-                    # Extract trained RF and one-hot feature names
-                    rf = pipe.named_steps["rf"]
-                    pre = pipe.named_steps["pre"]
-                    ohe = pre.named_transformers_["cat"]
-                    # build full feature names: scaled numeric + OHE cats
-                    num_names = num_cols
-                    cat_expanded = []
-                    if (
-                        cat_cols
-                        and hasattr(ohe, "get_feature_names_out")
-                        and hasattr(ohe, "categories_")
-                    ):
-                        cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
-                    full_names = num_names + cat_expanded
-                    importances = rf.feature_importances_
-                    fi = pd.DataFrame({"feature": full_names, "importance": importances}).sort_values("importance", ascending=False)
-                    st.markdown("#### 📋 Top Features")
-                    st.dataframe(fi.head(10), use_container_width=True, height=410)
-                    
-                # Second row
-                col3, col4 = st.columns(2)
-                
-                with col4:
-                    # Plot 3: SHAP Summary
-                    st.markdown("#### 🔎 SHAP Summary")
-                    # Build a small background set
-                    X_tr = data[X_cols].sample(min(100, len(data)), random_state=42)
-                    # Transform sample through preprocessor to get model input
-                    bg = pre.transform(X_tr)
-                    explainer = shap.TreeExplainer(rf)
-                    shap_values = explainer.shap_values(pre.transform(X_tr))
-                    try:
-                        st.set_option('deprecation.showPyplotGlobalUse', False)
-                    except Exception:
-                        pass
-                    shap.summary_plot(shap_values, features=pre.transform(X_tr), feature_names=full_names, show=False)
-                    fig = plt.gcf()
-                    fig.set_size_inches(5, 4)
-                    st.pyplot(fig, bbox_inches='tight')
-                    plt.close(fig)
-                
-                with col3:
-                    # Plot 4: Feature Importance Barplot
-                    st.markdown("#### 🌲 Feature Importance")
-                    plt.figure(figsize=(5, 4))
-                    sns.barplot(x="importance", y="feature", data=fi.head(15))
+            # 2x2 Grid
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 📈 Correlation Heatmap")
+                processed_for_corr = X_processed[X_cols].copy()
+                processed_for_corr[y_col] = y
+                num_for_corr = processed_for_corr.select_dtypes(include=[np.number])
+                if num_for_corr.shape[1] >= 2:
+                    plt.figure(figsize=(6, 5))
+                    corr = num_for_corr.corr()
+                    sns.heatmap(corr, annot=True, fmt='.2f', cmap="coolwarm", center=0, square=True,
+                               cbar_kws={"shrink": .8}, annot_kws={"size": 8})
                     plt.tight_layout()
                     st.pyplot(plt.gcf())
                     plt.close()
-            else:
-                st.info("Click 'Train & Analyze' to see model performance and visualizations.")
-        
+                else:
+                    st.info("Not enough numeric columns for correlation heatmap.")
+
+            with col2:
+                st.markdown("#### 📋 Top Features")
+                rf = pipe.named_steps["rf"]
+                pre = pipe.named_steps["pre"]
+                ohe = pre.named_transformers_["cat"]
+                num_names = num_cols
+                cat_expanded = []
+                if (
+                    cat_cols
+                    and hasattr(ohe, "get_feature_names_out")
+                    and hasattr(ohe, "categories_")
+                ):
+                    cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
+                full_names = num_names + cat_expanded
+                importances = rf.feature_importances_
+                fi = pd.DataFrame({"feature": full_names, "importance": importances}).sort_values("importance", ascending=False)
+                st.dataframe(fi.head(10), use_container_width=True, height=410)
+
+            col3, col4 = st.columns(2)
+
+            with col4:
+                st.markdown("#### 🔎 SHAP Summary")
+                sample_X = X_processed.sample(min(100, len(X_processed)), random_state=42)
+                pre = pipe.named_steps["pre"]
+                rf = pipe.named_steps["rf"]
+                explainer = shap.TreeExplainer(rf)
+                shap_values = explainer.shap_values(pre.transform(sample_X))
+                try:
+                    st.set_option('deprecation.showPyplotGlobalUse', False)
+                except Exception:
+                    pass
+                shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
+                fig = plt.gcf()
+                fig.set_size_inches(5, 4)
+                st.pyplot(fig, bbox_inches='tight')
+                plt.close(fig)
+
+            with col3:
+                st.markdown("#### 🌲 Feature Importance")
+                plt.figure(figsize=(5, 4))
+                sns.barplot(x="importance", y="feature", data=fi.head(15))
+                plt.tight_layout()
+                st.pyplot(plt.gcf())
+                plt.close()
+
     with tab2:
         # Initialize session state for data tab
         if 'data_tab_formula_inputs' not in st.session_state:
@@ -1328,8 +1353,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     
                     X = data[X_cols]
                     y = data[y_col].astype(float)
-                    pipe, num_cols, cat_cols = build_model(X, y)
-                    pipe.fit(X, y)
+                    pipe, num_cols, cat_cols, X_processed = build_model(X, y)
+                    pipe.fit(X_processed, y)
 
                     # Build a single-row DataFrame aligned to X_cols
                     row = {}
@@ -1337,11 +1362,20 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         if c == 'Needle Size':
                             row[c] = needle_size
                         elif c == 'Material':
-                            row[c] = material_in
+                            # Convert material to numeric for prediction
+                            material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                            row[c] = material_map.get(material_in, 1)
                         elif c == 'Thivex':
-                            row[c] = thivex_in
+                            # Convert thivex to numeric for prediction
+                            row[c] = float(thivex_in.replace('%', ''))
                         elif c == 'Time Period':
-                            row[c] = time_in
+                            # Convert time period to numeric for prediction
+                            time_map = {
+                                'Phase1: First 30 mins': 1,
+                                'Phase2: 30 mins to 60 min': 2, 
+                                'Phase3: After 60 mins': 3
+                            }
+                            row[c] = time_map.get(time_in, 1)
                         elif c == 'Pressure (psi)':
                             row[c] = press_in
                         elif c == 'Speed (mm/s)':
@@ -1367,7 +1401,23 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                                 row[c] = 0.0
 
                     x_row = pd.DataFrame([row], columns=X_cols)
-                    pred_width = float(pipe.predict(x_row)[0])  # µm
+                    
+                    # Process prediction input the same way as training data
+                    x_row_processed = x_row.copy()
+                    if 'Thivex' in x_row_processed.columns:
+                        x_row_processed['Thivex'] = x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                    if 'Material' in x_row_processed.columns:
+                        material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                        x_row_processed['Material'] = x_row_processed['Material'].map(material_map)
+                    if 'Time Period' in x_row_processed.columns:
+                        time_map = {
+                            'Phase1: First 30 mins': 1,
+                            'Phase2: 30 mins to 60 min': 2, 
+                            'Phase3: After 60 mins': 3
+                        }
+                        x_row_processed['Time Period'] = x_row_processed['Time Period'].map(time_map)
+                    
+                    pred_width = float(pipe.predict(x_row_processed)[0])  # µm
 
                     # Classification by difference
                     internal_um = INTERNAL_DIAMETER.get(needle_size, 0.0)
@@ -1443,79 +1493,3 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 st.info("Click 'Predict Line Width' to see results.")
             st.markdown('<p style="text-align: center; color: #666; font-size: 0.9em; margin-top: 10px;">Tip: Use this panel to predict line width based on your trained model.</p>', unsafe_allow_html=True)
             
-
-    #         # st.markdown("### 📊 Model Analysis Dashboard")
-    #         # Create 2x2 grid
-    #         col3, col4 = st.columns(2)
-    #         with col3:
-    #             # Plot 1: Correlation Heatmap
-    #             st.markdown("#### 📈 Correlation Heatmap")
-    #             num_for_corr = data[X_cols + [y_col]].select_dtypes(include=[np.number])
-    #             if num_for_corr.shape[1] >= 2:
-    #                 plt.figure(figsize=(6, 5))
-    #                 corr = num_for_corr.corr()
-    #                 # Create heatmap with annotations
-    #                 sns.heatmap(corr, 
-    #                             annot=True,  # Show values
-    #                             fmt='.2f',   # Format to 2 decimal places
-    #                             cmap="coolwarm", 
-    #                             center=0,
-    #                             square=True,  # Make it square
-    #                             cbar_kws={"shrink": .8},
-    #                             annot_kws={"size": 8})  # Smaller font for annotations
-    #                 plt.tight_layout()
-    #                 st.pyplot(plt.gcf())
-    #                 plt.close()
-    #             else:
-    #                 st.info("Not enough numeric columns for correlation heatmap.")
-            
-    #         with col4:
-    #             # Plot 2: Feature Importance Table
-    #             # Extract trained RF and one-hot feature names
-    #             rf = pipe.named_steps["rf"]
-    #             pre = pipe.named_steps["pre"]
-    #             ohe = pre.named_transformers_["cat"]
-    #             # build full feature names: scaled numeric + OHE cats
-    #             num_names = num_cols
-    #             cat_expanded = []
-    #             if hasattr(ohe, "get_feature_names_out"):
-    #                 cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
-    #             full_names = num_names + cat_expanded
-    #             importances = rf.feature_importances_
-    #             fi = pd.DataFrame({"feature": full_names, "importance": importances}).sort_values("importance", ascending=False)
-    #             st.markdown("#### 📋 Top Features")
-    #             st.dataframe(fi.head(10), use_container_width=True, height=410)
-                
-    #         # Second row
-    #         col5, col6 = st.columns(2)
-            
-    #         with col5:
-    #             # Plot 4: SHAP Summary
-    #             st.markdown("#### 🔎 SHAP Summary")
-    #             # Build a small background set
-    #             sample_X = X_tr.sample(min(100, len(X_tr)), random_state=42)
-    #             # Transform sample through preprocessor to get model input
-    #             bg = pre.transform(sample_X)
-    #             explainer = shap.TreeExplainer(rf)
-    #             shap_values = explainer.shap_values(pre.transform(sample_X))
-    #             try:
-    #                 st.set_option('deprecation.showPyplotGlobalUse', False)
-    #             except Exception:
-    #                 pass
-    #             shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
-    #             fig = plt.gcf()
-    #             fig.set_size_inches(5, 4)
-    #             st.pyplot(fig, bbox_inches='tight')
-    #             plt.close(fig)
-            
-    #         with col6:
-    #             # Plot 3: Feature Importance Barplot
-    #             st.markdown("#### 🌲 Feature Importance")
-    #             plt.figure(figsize=(5, 4))
-    #             sns.barplot(x="importance", y="feature", data=fi.head(15))
-    #             plt.tight_layout()
-    #             st.pyplot(plt.gcf())
-    #             plt.close()
-    
-    # End of tabs section
-    # End of main application condition
