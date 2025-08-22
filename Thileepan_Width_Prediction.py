@@ -1,3 +1,4 @@
+#type: ignore
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -1308,7 +1309,9 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
             if 'pred_pressure' not in st.session_state:
                 st.session_state.pred_pressure = 85.0
             if 'pred_speed' not in st.session_state:
-                st.session_state.pred_speed = 1200.0
+                st.session_state.pred_speed = 50.0
+            if 'show_graphs' not in st.session_state:
+                st.session_state.show_graphs = False
             
             needle_size = st.selectbox("Needle Size (Gauge)", options=[18, 21], 
                                       index=0 if st.session_state.pred_needle_size == 18 else 1,
@@ -1326,7 +1329,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                                       value=st.session_state.pred_pressure, step=1.0,
                                       key="pred_pressure")
             speed_in = st.number_input("Speed (mm/s)", min_value=5.0, max_value=4000.0, 
-                                      value=st.session_state.pred_speed, step=10.0,
+                                      value=st.session_state.pred_speed, step=1.0,
                                       key="pred_speed")
             
             pred_btn = st.button("🔮 Predict Line Width", type="primary", use_container_width=True)
@@ -1432,6 +1435,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         'verdict': verdict
                     }
                     st.session_state.last_prediction_inputs = row
+                    st.session_state.show_graphs = True  # Flag to show graphs for this prediction
 
                     # Display results in a nice format
                     st.markdown("""
@@ -1457,11 +1461,146 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     </div>
                     """.format(pred_width, internal_um, width_diff, verdict), unsafe_allow_html=True)
                     
+                    # Add width vs speed and width vs pressure graphs
+                    st.markdown("#### 📊 Parameter Range Analysis")
+                    
+                    # Create two columns for the graphs
+                    graph_col1, graph_col2 = st.columns(2)
+                    
+                    with graph_col1:
+                        st.markdown("**Width vs Speed**")
+                        
+                        # Get actual data ranges from the training data for better graph scaling
+                        if 'data' in st.session_state:
+                            actual_speeds = st.session_state['data']['Speed (mm/s)'].dropna()
+                            min_speed = max(5.0, actual_speeds.min() * 0.5)
+                            max_speed = min(4000.0, actual_speeds.max() * 1.5)
+                        else:
+                            min_speed = max(5.0, speed_in * 0.5)
+                            max_speed = min(4000.0, speed_in * 1.5)
+                        
+                        # Create a range of speeds based on actual data
+                        speed_range = np.linspace(min_speed, max_speed, 50)
+                        width_predictions = []
+                        
+                        for test_speed in speed_range:
+                            # Create test row with current speed
+                            test_row = row.copy()
+                            test_row['Speed (mm/s)'] = test_speed
+                            
+                            # Update physics columns if they exist
+                            if 'AreaA1 (mm2)' in test_row:
+                                d_mm = 0.838 if needle_size == 18 else 0.514
+                                test_row['AreaA1 (mm2)'] = np.pi * (d_mm**2) / 4.0
+                            if 'FlowQ1 (mm3/s)' in test_row:
+                                d_mm = 0.838 if needle_size == 18 else 0.514
+                                area = np.pi * (d_mm**2) / 4.0
+                                test_row['FlowQ1 (mm3/s)'] = area * test_speed
+                            if 'ShearS1 (1/s)' in test_row:
+                                d_mm = 0.838 if needle_size == 18 else 0.514
+                                test_row['ShearS1 (1/s)'] = 8.0 * test_speed / max(d_mm, 1e-6)
+                            if 'ViscosN1 (Pa·s)' in test_row:
+                                d_mm = 0.838 if needle_size == 18 else 0.514
+                                shear = 8.0 * test_speed / max(d_mm, 1e-6)
+                                K, n = 0.9, 0.06
+                                test_row['ViscosN1 (Pa·s)'] = K * (shear ** (n - 1.0))
+                            
+                            # Process the test row
+                            test_x_row = pd.DataFrame([test_row], columns=X_cols)
+                            test_x_row_processed = test_x_row.copy()
+                            if 'Thivex' in test_x_row_processed.columns:
+                                test_x_row_processed['Thivex'] = test_x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                            if 'Material' in test_x_row_processed.columns:
+                                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                                test_x_row_processed['Material'] = test_x_row_processed['Material'].map(material_map)
+                            if 'Time Period' in test_x_row_processed.columns:
+                                time_map = {
+                                    'Phase1: First 30 mins': 1,
+                                    'Phase2: 30 mins to 60 min': 2, 
+                                    'Phase3: After 60 mins': 3
+                                }
+                                test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
+                            
+                            # Predict width for this speed
+                            test_pred_width = float(pipe.predict(test_x_row_processed)[0])
+                            width_predictions.append(test_pred_width)
+                        
+                        # Create the width vs speed plot
+                        fig, ax = plt.subplots(figsize=(6, 4))
+                        ax.plot(speed_range, width_predictions, 'b-', linewidth=2, alpha=0.7)
+                        ax.scatter([speed_in], [pred_width], color='red', s=100, zorder=5, label='Current Point')
+                        ax.axhline(y=internal_um, color='green', linestyle='--', alpha=0.7, label=f'Target ({internal_um:.0f} µm)')
+                        ax.set_xlabel('Speed (mm/s)')
+                        ax.set_ylabel('Predicted Width (µm)')
+                        ax.set_title('Width vs Speed')
+                        ax.legend()
+                        ax.grid(True, alpha=0.3)
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+                    
+                    with graph_col2:
+                        st.markdown("**Width vs Pressure**")
+                        
+                        # Get actual data ranges from the training data for better graph scaling
+                        if 'data' in st.session_state:
+                            actual_pressures = st.session_state['data']['Pressure (psi)'].dropna()
+                            min_pressure = max(20.0, actual_pressures.min() * 0.5)
+                            max_pressure = min(200.0, actual_pressures.max() * 1.5)
+                        else:
+                            min_pressure = max(20.0, press_in * 0.5)
+                            max_pressure = min(200.0, press_in * 1.5)
+                        
+                        # Create a range of pressures based on actual data
+                        pressure_range = np.linspace(min_pressure, max_pressure, 50)
+                        width_predictions_pressure = []
+                        
+                        for test_pressure in pressure_range:
+                            # Create test row with current pressure
+                            test_row = row.copy()
+                            test_row['Pressure (psi)'] = test_pressure
+                            
+                            # Process the test row
+                            test_x_row = pd.DataFrame([test_row], columns=X_cols)
+                            test_x_row_processed = test_x_row.copy()
+                            if 'Thivex' in test_x_row_processed.columns:
+                                test_x_row_processed['Thivex'] = test_x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                            if 'Material' in test_x_row_processed.columns:
+                                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                                test_x_row_processed['Material'] = test_x_row_processed['Material'].map(material_map)
+                            if 'Time Period' in test_x_row_processed.columns:
+                                time_map = {
+                                    'Phase1: First 30 mins': 1,
+                                    'Phase2: 30 mins to 60 min': 2, 
+                                    'Phase3: After 60 mins': 3
+                                }
+                                test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
+                            
+                            # Predict width for this pressure
+                            test_pred_width = float(pipe.predict(test_x_row_processed)[0])
+                            width_predictions_pressure.append(test_pred_width)
+                        
+                        # Create the width vs pressure plot
+                        fig, ax = plt.subplots(figsize=(6, 4))
+                        ax.plot(pressure_range, width_predictions_pressure, 'orange', linewidth=2, alpha=0.7)
+                        ax.scatter([press_in], [pred_width], color='red', s=100, zorder=5, label='Current Point')
+                        ax.axhline(y=internal_um, color='green', linestyle='--', alpha=0.7, label=f'Target ({internal_um:.0f} µm)')
+                        ax.set_xlabel('Pressure (psi)')
+                        ax.set_ylabel('Predicted Width (µm)')
+                        ax.set_title('Width vs Pressure')
+                        ax.legend()
+                        ax.grid(True, alpha=0.3)
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+                    
                     with st.expander("📋 Show input parameters sent to model"):
                         st.json(row)
             
             # Display saved results if available (when page reruns)
             elif st.session_state.prediction_results is not None:
+                # Reset graphs flag when just viewing saved results (not a new prediction)
+                st.session_state.show_graphs = False
                 results = st.session_state.prediction_results
                 st.markdown("""
                 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; margin: 20px 0;">
@@ -1487,6 +1626,157 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 """.format(results['pred_width'], results['internal_um'], results['width_diff'], results['verdict']), unsafe_allow_html=True)
                 
                 if st.session_state.last_prediction_inputs:
+                    # Only show graphs if this is a fresh prediction (not just viewing saved results)
+                    if 'show_graphs' in st.session_state and st.session_state.show_graphs:
+                        # Add width vs speed and width vs pressure graphs for saved results
+                        st.markdown("#### 📊 Parameter Range Analysis")
+                        
+                        # Get the saved inputs and results
+                        saved_inputs = st.session_state.last_prediction_inputs
+                        saved_results = st.session_state.prediction_results
+                        
+                        # Create two columns for the graphs
+                        graph_col1, graph_col2 = st.columns(2)
+                    
+                    with graph_col1:
+                        st.markdown("**Width vs Speed**")
+                        
+                        # Get actual data ranges from the training data for better graph scaling
+                        if 'data' in st.session_state:
+                            actual_speeds = st.session_state['data']['Speed (mm/s)'].dropna()
+                            min_speed = max(5.0, actual_speeds.min() * 0.5)
+                            max_speed = min(4000.0, actual_speeds.max() * 1.5)
+                        else:
+                            saved_speed = saved_inputs.get('Speed (mm/s)', 50.0)
+                            min_speed = max(5.0, saved_speed * 0.5)
+                            max_speed = min(4000.0, saved_speed * 1.5)
+                        
+                        # Create a range of speeds based on actual data
+                        speed_range = np.linspace(min_speed, max_speed, 50)
+                        width_predictions = []
+                        
+                        for test_speed in speed_range:
+                            # Create test row with current speed
+                            test_row = saved_inputs.copy()
+                            test_row['Speed (mm/s)'] = test_speed
+                            
+                            # Update physics columns if they exist
+                            if 'AreaA1 (mm2)' in test_row:
+                                needle_size = saved_inputs.get('Needle Size', 18)
+                                d_mm = 0.838 if needle_size == 18 else 0.514
+                                test_row['AreaA1 (mm2)'] = np.pi * (d_mm**2) / 4.0
+                            if 'FlowQ1 (mm3/s)' in test_row:
+                                needle_size = saved_inputs.get('Needle Size', 18)
+                                d_mm = 0.838 if needle_size == 18 else 0.514
+                                area = np.pi * (d_mm**2) / 4.0
+                                test_row['FlowQ1 (mm3/s)'] = area * test_speed
+                            if 'ShearS1 (1/s)' in test_row:
+                                needle_size = saved_inputs.get('Needle Size', 18)
+                                d_mm = 0.838 if needle_size == 18 else 0.514
+                                test_row['ShearS1 (1/s)'] = 8.0 * test_speed / max(d_mm, 1e-6)
+                            if 'ViscosN1 (Pa·s)' in test_row:
+                                needle_size = saved_inputs.get('Needle Size', 18)
+                                d_mm = 0.838 if needle_size == 18 else 0.514
+                                shear = 8.0 * test_speed / max(d_mm, 1e-6)
+                                K, n = 0.9, 0.06
+                                test_row['ViscosN1 (Pa·s)'] = K * (shear ** (n - 1.0))
+                            
+                            # Process the test row
+                            test_x_row = pd.DataFrame([test_row], columns=X_cols)
+                            test_x_row_processed = test_x_row.copy()
+                            if 'Thivex' in test_x_row_processed.columns:
+                                test_x_row_processed['Thivex'] = test_x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                            if 'Material' in test_x_row_processed.columns:
+                                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                                test_x_row_processed['Material'] = test_x_row_processed['Material'].map(material_map)
+                            if 'Time Period' in test_x_row_processed.columns:
+                                time_map = {
+                                    'Phase1: First 30 mins': 1,
+                                    'Phase2: 30 mins to 60 min': 2, 
+                                    'Phase3: After 60 mins': 3
+                                }
+                                test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
+                            
+                            # Predict width for this speed
+                            test_pred_width = float(pipe.predict(test_x_row_processed)[0])
+                            width_predictions.append(test_pred_width)
+                        
+                        # Get the saved speed value for plotting
+                        saved_speed = saved_inputs.get('Speed (mm/s)', 50.0)
+                        
+                        # Create the width vs speed plot
+                        fig, ax = plt.subplots(figsize=(6, 4))
+                        ax.plot(speed_range, width_predictions, 'b-', linewidth=2, alpha=0.7)
+                        ax.scatter([saved_speed], [saved_results['pred_width']], color='red', s=100, zorder=5, label='Current Point')
+                        ax.axhline(y=saved_results['internal_um'], color='green', linestyle='--', alpha=0.7, label=f'Target ({saved_results["internal_um"]:.0f} µm)')
+                        ax.set_xlabel('Speed (mm/s)')
+                        ax.set_ylabel('Predicted Width (µm)')
+                        ax.set_title('Width vs Speed')
+                        ax.legend()
+                        ax.grid(True, alpha=0.3)
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+                    
+                    with graph_col2:
+                        st.markdown("**Width vs Pressure**")
+                        
+                        # Get actual data ranges from the training data for better graph scaling
+                        if 'data' in st.session_state:
+                            actual_pressures = st.session_state['data']['Pressure (psi)'].dropna()
+                            min_pressure = max(20.0, actual_pressures.min() * 0.5)
+                            max_pressure = min(200.0, actual_pressures.max() * 1.5)
+                        else:
+                            saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
+                            min_pressure = max(20.0, saved_pressure * 0.5)
+                            max_pressure = min(200.0, saved_pressure * 1.5)
+                        
+                        # Create a range of pressures based on actual data
+                        pressure_range = np.linspace(min_pressure, max_pressure, 50)
+                        width_predictions_pressure = []
+                        
+                        for test_pressure in pressure_range:
+                            # Create test row with current pressure
+                            test_row = saved_inputs.copy()
+                            test_row['Pressure (psi)'] = test_pressure
+                            
+                            # Process the test row
+                            test_x_row = pd.DataFrame([test_row], columns=X_cols)
+                            test_x_row_processed = test_x_row.copy()
+                            if 'Thivex' in test_x_row_processed.columns:
+                                test_x_row_processed['Thivex'] = test_x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                            if 'Material' in test_x_row_processed.columns:
+                                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                                test_x_row_processed['Material'] = test_x_row_processed['Material'].map(material_map)
+                            if 'Time Period' in test_x_row_processed.columns:
+                                time_map = {
+                                    'Phase1: First 30 mins': 1,
+                                    'Phase2: 30 mins to 60 min': 2, 
+                                    'Phase3: After 60 mins': 3
+                                }
+                                test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
+                            
+                            # Predict width for this pressure
+                            test_pred_width = float(pipe.predict(test_x_row_processed)[0])
+                            width_predictions_pressure.append(test_pred_width)
+                        
+                        # Get the saved pressure value for plotting
+                        saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
+                        
+                        # Create the width vs pressure plot
+                        fig, ax = plt.subplots(figsize=(6, 4))
+                        ax.plot(pressure_range, width_predictions_pressure, 'orange', linewidth=2, alpha=0.7)
+                        ax.scatter([saved_pressure], [saved_results['pred_width']], color='red', s=100, zorder=5, label='Current Point')
+                        ax.axhline(y=saved_results['internal_um'], color='green', linestyle='--', alpha=0.7, label=f'Target ({saved_results["internal_um"]:.0f} µm)')
+                        ax.set_xlabel('Pressure (psi)')
+                        ax.set_ylabel('Predicted Width (µm)')
+                        ax.set_title('Width vs Pressure')
+                        ax.legend()
+                        ax.grid(True, alpha=0.3)
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+                    
                     with st.expander("📋 Show last input parameters"):
                         st.json(st.session_state.last_prediction_inputs)
             else:
