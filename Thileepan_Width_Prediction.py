@@ -1,19 +1,20 @@
-#type: ignore
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error
+from xgboost import XGBRegressor
+from sklearn.svm import SVR
+from sklearn.neighbors import KNeighborsRegressor
 import sklearn.exceptions
 import shap
-import tempfile
 import os
 from datetime import datetime
 import warnings
@@ -194,9 +195,9 @@ def compute_physics_columns(df: pd.DataFrame,
     except Exception as e:
         return df, f"Failed to compute new column: {e}"
 
-def build_model(X: pd.DataFrame, y: pd.Series):
+def build_model(X: pd.DataFrame, y: pd.Series, model_type="Random Forest", fine_tune=False):
     """
-    Builds and returns a pipeline (scaler + OHE + RandomForest).
+    Builds and returns a pipeline (scaler + OHE + selected model) with optional fine-tuning.
     """
     # Create a copy to avoid modifying original data
     X_processed = X.copy()
@@ -221,18 +222,201 @@ def build_model(X: pd.DataFrame, y: pd.Series):
     numeric_cols = X_processed.select_dtypes(include=[np.number]).columns.tolist()
     categorical_cols = [c for c in X_processed.columns if c not in numeric_cols]
 
+    # Add NaN handling for SVR compatibility
     pre = ColumnTransformer([
-        ("num", StandardScaler(), numeric_cols),
-        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols),
+        ("num", Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler())
+        ]), numeric_cols),
+        ("cat", Pipeline([
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("encoder", OneHotEncoder(handle_unknown="ignore"))
+        ]), categorical_cols),
     ])
 
-    model = Pipeline([
-        ("pre", pre),
-        ("rf", RandomForestRegressor(
-            n_estimators=500, random_state=42, n_jobs=-1,
-            max_depth=None, min_samples_split=2, min_samples_leaf=1
-        ))
-    ])
+    # Select model based on model_type with fine-tuning options
+    if model_type == "Random Forest":
+        if fine_tune:
+            # Fine-tuned Random Forest - optimized for better performance
+            model = Pipeline([
+                ("pre", pre),
+                ("rf", RandomForestRegressor(
+                    n_estimators=800, random_state=42, n_jobs=-1,
+                    max_depth=None, min_samples_split=3, min_samples_leaf=1,
+                    max_features='sqrt', bootstrap=True, oob_score=True
+                ))
+            ])
+        else:
+            model = Pipeline([
+                ("pre", pre),
+                ("rf", RandomForestRegressor(
+                    n_estimators=500, random_state=42, n_jobs=-1,
+                    max_depth=None, min_samples_split=2, min_samples_leaf=1
+                ))
+            ])
+    elif model_type == "XGBoost":
+        if fine_tune:
+            # Enhanced fine-tuned XGBoost with aggressive optimization
+            xgb_configs = [
+                {
+                    'n_estimators': 1200, 'learning_rate': 0.03, 'max_depth': 10,
+                    'min_child_weight': 2, 'subsample': 0.85, 'colsample_bytree': 0.85,
+                    'reg_alpha': 0.05, 'reg_lambda': 0.8, 'random_state': 42, 'n_jobs': -1
+                },
+                {
+                    'n_estimators': 1500, 'learning_rate': 0.02, 'max_depth': 8,
+                    'min_child_weight': 3, 'subsample': 0.9, 'colsample_bytree': 0.9,
+                    'reg_alpha': 0.1, 'reg_lambda': 1.0, 'random_state': 42, 'n_jobs': -1
+                },
+                {
+                    'n_estimators': 800, 'learning_rate': 0.08, 'max_depth': 12,
+                    'min_child_weight': 1, 'subsample': 0.75, 'colsample_bytree': 0.75,
+                    'reg_alpha': 0.2, 'reg_lambda': 1.2, 'random_state': 42, 'n_jobs': -1
+                }
+            ]
+            best_score = -float('inf')
+            best_config = None
+            
+            for config in xgb_configs:
+                try:
+                    test_xgb = XGBRegressor(**config)
+                    test_pipe = Pipeline([("pre", pre), ("xgb", test_xgb)])
+                    test_pipe.fit(X_processed, y)
+                    score = test_pipe.score(X_processed, y)
+                    if score > best_score:
+                        best_score = score
+                        best_config = config
+                except:
+                    continue
+            
+            if best_score > -float('inf'):
+                model = Pipeline([
+                    ("pre", pre),
+                    ("xgb", XGBRegressor(**best_config))
+                ])
+            else:
+                # Fallback to enhanced default
+                model = Pipeline([
+                    ("pre", pre),
+                    ("xgb", XGBRegressor(
+                        n_estimators=1200, learning_rate=0.03, max_depth=10,
+                        min_child_weight=2, subsample=0.85, colsample_bytree=0.85,
+                        reg_alpha=0.05, reg_lambda=0.8, random_state=42, n_jobs=-1
+                    ))
+                ])
+        else:
+            model = Pipeline([
+                ("pre", pre),
+                ("xgb", XGBRegressor(
+                    n_estimators=500, learning_rate=0.1, max_depth=6,
+                    random_state=42, n_jobs=-1
+                ))
+            ])
+    elif model_type == "SVR":
+        if fine_tune:
+            svr_configs = [
+                {'kernel': 'rbf', 'C': 800.0, 'gamma': 'scale', 'epsilon': 0.01},
+                {'kernel': 'rbf', 'C': 1000.0, 'gamma': 'auto', 'epsilon': 0.008},
+                {'kernel': 'rbf', 'C': 1200.0, 'gamma': 'scale', 'epsilon': 0.005},
+                {'kernel': 'rbf', 'C': 1500.0, 'gamma': 'auto', 'epsilon': 0.003},
+                {'kernel': 'rbf', 'C': 600.0, 'gamma': 'scale', 'epsilon': 0.015},
+                {'kernel': 'poly', 'C': 800.0, 'gamma': 'scale', 'epsilon': 0.01, 'degree': 2},
+                {'kernel': 'poly', 'C': 1000.0, 'gamma': 'auto', 'epsilon': 0.008, 'degree': 3}
+            ]
+            best_score = -float('inf')
+            best_config = None
+            
+            for config in svr_configs:
+                try:
+                    test_svr = SVR(**config, max_iter=3000, cache_size=2000, shrinking=True, tol=1e-4)
+                    test_pipe = Pipeline([("pre", pre), ("svr", test_svr)])
+                    test_pipe.fit(X_processed, y)
+                    score = test_pipe.score(X_processed, y)
+                    if score > best_score:
+                        best_score = score
+                        best_config = config
+                except:
+                    continue
+            
+            if best_score > -float('inf'):
+                model = Pipeline([
+                    ("pre", pre),
+                    ("svr", SVR(**best_config, max_iter=3000, cache_size=2000, shrinking=True, tol=1e-4))
+                ])
+            else:
+                # Fallback to aggressive default for RMSE ~60 µm
+                model = Pipeline([
+                    ("pre", pre),
+                    ("svr", SVR(
+                        kernel='rbf', C=1000.0, gamma='auto', epsilon=0.008,
+                        max_iter=3000, cache_size=2000, shrinking=True, tol=1e-4
+                    ))
+                ])
+        else:
+            model = Pipeline([
+                ("pre", pre),
+                ("svr", SVR(
+                    kernel='rbf', 
+                    C=100.0,  # Increased for better regularization
+                    gamma='scale',  # Better for scaled features
+                    epsilon=0.05,  # Tighter tolerance
+                    max_iter=2000,  # More iterations for convergence
+                    cache_size=1000  # Larger cache for better performance
+                ))
+            ])
+    elif model_type == "KNN":
+        if fine_tune:
+            # Enhanced fine-tuned KNN with better parameter optimization
+            knn_configs = [
+                {'n_neighbors': 3, 'weights': 'distance', 'algorithm': 'auto', 'leaf_size': 20, 'p': 1},
+                {'n_neighbors': 5, 'weights': 'distance', 'algorithm': 'auto', 'leaf_size': 30, 'p': 2},
+                {'n_neighbors': 7, 'weights': 'distance', 'algorithm': 'ball_tree', 'leaf_size': 25, 'p': 1},
+                {'n_neighbors': 4, 'weights': 'uniform', 'algorithm': 'kd_tree', 'leaf_size': 30, 'p': 2}
+            ]
+            best_score = -float('inf')
+            best_config = None
+            
+            for config in knn_configs:
+                try:
+                    test_knn = KNeighborsRegressor(**config)
+                    test_pipe = Pipeline([("pre", pre), ("knn", test_knn)])
+                    test_pipe.fit(X_processed, y)
+                    score = test_pipe.score(X_processed, y)
+                    if score > best_score:
+                        best_score = score
+                        best_config = config
+                except:
+                    continue
+            
+            if best_score > -float('inf'):
+                model = Pipeline([
+                    ("pre", pre),
+                    ("knn", KNeighborsRegressor(**best_config))
+                ])
+            else:
+                # Fallback to enhanced default
+                model = Pipeline([
+                    ("pre", pre),
+                    ("knn", KNeighborsRegressor(
+                        n_neighbors=5, weights='distance', 
+                        algorithm='auto', leaf_size=25, p=1
+                    ))
+                ])
+        else:
+            model = Pipeline([
+                ("pre", pre),
+                ("knn", KNeighborsRegressor(n_neighbors=5, weights='uniform'))
+            ])
+    else:
+        # Default to Random Forest
+        model = Pipeline([
+            ("pre", pre),
+            ("rf", RandomForestRegressor(
+                n_estimators=500, random_state=42, n_jobs=-1,
+                max_depth=None, min_samples_split=2, min_samples_leaf=1
+            ))
+        ])
+    
     return model, numeric_cols, categorical_cols, X_processed
 
 def quality_bucket(width_diff):
@@ -793,6 +977,22 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
     with col4:
         st.markdown("### 🚀 Model Training")
         
+        # Initialize model selection in session state
+        if 'selected_model' not in st.session_state:
+            st.session_state.selected_model = "Random Forest"
+        
+        # Model selection dropdown
+        selected_model = st.selectbox(
+            "Model Type",
+            options=["Random Forest", "XGBoost", "SVR", "KNN"],
+            index=["Random Forest", "XGBoost", "SVR", "KNN"].index(st.session_state.selected_model) if st.session_state.selected_model in ["Random Forest", "XGBoost", "SVR", "KNN"] else 0,
+            help="Choose the machine learning model for prediction",
+            key="model_selector"
+        )
+        
+        # Update session state
+        st.session_state.selected_model = selected_model
+        
         # Initialize test size in session state
         if 'test_size' not in st.session_state:
             st.session_state.test_size = 0.2
@@ -811,6 +1011,18 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
         # Update session state
         st.session_state.test_size = test_size
         
+        # Fine-tuning toggle
+        if 'fine_tune' not in st.session_state:
+            st.session_state.fine_tune = False
+        
+        fine_tune = st.checkbox(
+            "🔧 Enable Fine-tuning", 
+            value=st.session_state.fine_tune,
+            help="Enable advanced hyperparameter optimization for better performance (slower training)",
+            key="fine_tune_checkbox"
+        )
+        st.session_state.fine_tune = fine_tune
+        
     with col5:
         st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
         
@@ -825,6 +1037,23 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
         """, unsafe_allow_html=True)
         
         run_training = st.button("Train & Analyze", type="primary", use_container_width=True)
+        
+        # Check if model or features have changed and show retrain message
+        if 'previous_model' not in st.session_state:
+            st.session_state.previous_model = selected_model
+        if 'previous_features' not in st.session_state:
+            st.session_state.previous_features = X_cols if X_cols else []
+        
+        # Check for changes
+        model_changed = st.session_state.previous_model != selected_model
+        features_changed = st.session_state.previous_features != (X_cols if X_cols else [])
+        
+        if model_changed or features_changed:
+            st.info("🔄 Please retrain the model")
+        
+        # Update previous values
+        st.session_state.previous_model = selected_model
+        st.session_state.previous_features = X_cols if X_cols else []
 
     # -------------------- Tabs for Plot and Data --------------------
     if 'df' in locals() and 'y_col' in locals() and 'X_cols' in locals():
@@ -883,6 +1112,9 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 
                 # Show a message that data has been refreshed
                 # st.success("🔄 **Data refreshed!** New model training with updated parameters.")
+                
+                # Set a flag to show feature change prompt
+                st.session_state.show_feature_change_prompt = True
             
             # Validate that features are selected
             if not X_cols:
@@ -905,8 +1137,14 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
 
             # Train/test split for quick metrics
             X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
-            pipe, num_cols, cat_cols, X_processed = build_model(X_tr, y_tr)
-            pipe.fit(X_processed, y_tr)
+            
+            try:
+                pipe, num_cols, cat_cols, X_processed = build_model(X_tr, y_tr, selected_model, fine_tune)
+                pipe.fit(X_processed, y_tr)
+            except Exception as e:
+                st.error(f"❌ **Model training failed for {selected_model}**: {str(e)}")
+                st.info("💡 **Tips**: Try a different model or check your data quality.")
+                st.stop()
             
             # Process test data the same way as training data
             X_te_processed = X_te.copy()
@@ -932,11 +1170,21 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
 
             # Save in session
             st.session_state["trained_pipeline"] = pipe
+            st.session_state["selected_model"] = selected_model
             st.session_state["X_cols"] = X_cols
             st.session_state["y_col"] = y_col
             st.session_state["numeric"] = num_cols
             st.session_state["categorical"] = cat_cols
             st.session_state["data"] = data
+            
+            # Add model performance to session state for comparison
+            if 'model_performances' not in st.session_state:
+                st.session_state.model_performances = {}
+            st.session_state.model_performances[selected_model] = {
+                'r2': r2,
+                'rmse': rmse,
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
             
             # Save plot-specific results
             st.session_state.plot_training_results = {
@@ -981,6 +1229,29 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 st.info(f"🎯 **Accuracy**: {'High' if rmse < 50 else 'Medium' if rmse < 100 else 'Low'}")
             with col3:
                 st.info(f"📈 **Reliability**: {'Very High' if r2 > 0.95 else 'High' if r2 > 0.85 else 'Moderate'}")
+            
+            # Model comparison section
+            if len(st.session_state.model_performances) > 1:
+                st.markdown("### 📊 Model Performance Comparison")
+                
+                # Show fine-tuning status
+                if fine_tune:
+                    st.success("🔧 **Fine-tuning enabled** - Advanced hyperparameter optimization applied!")
+                comparison_data = []
+                for model_name, perf in st.session_state.model_performances.items():
+                    comparison_data.append({
+                        'Model': model_name,
+                        'R² Score': f"{perf['r2']:.3f}",
+                        'RMSE (µm)': f"{perf['rmse']:.1f}",
+                        'Last Trained': perf['timestamp']
+                    })
+                
+                comparison_df = pd.DataFrame(comparison_data)
+                st.dataframe(comparison_df, use_container_width=True)
+                
+                # Highlight best performing model
+                best_model = max(st.session_state.model_performances.items(), key=lambda x: x[1]['r2'])
+                st.success(f"🏆 **Best performing model**: {best_model[0]} (R² = {best_model[1]['r2']:.3f})")
 
             # ---- 2x2 Grid Layout for Plots ----
             # st.markdown("### 📊 Model Analysis Dashboard")
@@ -1016,163 +1287,248 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
             
             with col2:
                 # Plot 2: Feature Importance Table
-                # Extract trained RF and one-hot feature names
-                rf = pipe.named_steps["rf"]
+                # Extract trained model and one-hot feature names
                 pre = pipe.named_steps["pre"]
-                ohe = pre.named_transformers_["cat"]
                 # build full feature names: scaled numeric + OHE cats
                 num_names = num_cols
                 cat_expanded = []
+                
                 # Only attempt to read encoder feature names if we actually
                 # have categorical columns and the encoder has been fitted
-                if (
-                    cat_cols
-                    and hasattr(ohe, "get_feature_names_out")
-                    and hasattr(ohe, "categories_")
-                ):
-                    cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
+                if cat_cols:
+                    try:
+                        ohe = pre.named_transformers_["cat"]
+                        if (
+                            hasattr(ohe, "get_feature_names_out")
+                            and hasattr(ohe, "categories_")
+                        ):
+                            cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
+                    except Exception:
+                        # If categorical transformer is not available, use original names
+                        cat_expanded = cat_cols
+                
                 full_names = num_names + cat_expanded
-                importances = rf.feature_importances_
-                fi = pd.DataFrame({"feature": full_names, "importance": importances}).sort_values("importance", ascending=False)
-                st.markdown("#### 📋 Top Features")
-                st.dataframe(fi.head(10), use_container_width=True, height=410)
+                
+                # Handle feature importance for different model types
+                fi = None  # Initialize fi variable
+                if selected_model in ["Random Forest", "XGBoost"]:
+                    # Get the correct model step name
+                    model_step_name = "rf" if selected_model == "Random Forest" else "xgb"
+                    if model_step_name in pipe.named_steps:
+                        model_step = pipe.named_steps[model_step_name]
+                        importances = model_step.feature_importances_
+                        fi = pd.DataFrame({"feature": full_names, "importance": importances}).sort_values("importance", ascending=False)
+                        st.markdown("#### 📋 Top Features")
+                        st.dataframe(fi.head(10), use_container_width=True, height=410)
+                    else:
+                        st.markdown("#### 📋 Model Info")
+                        st.info(f"Model step '{model_step_name}' not found in pipeline.")
+                else:
+                    st.markdown("#### 📋 Model Info")
+                    st.info(f"Feature importance not available for {selected_model}. This model focuses on pattern recognition rather than feature ranking.")
                 
             # Second row
             col3, col4 = st.columns(2)
             
             with col4:
-                # Plot 4: SHAP Summary
-                st.markdown("#### 🔎 SHAP Summary")
-                # Build a small background set using processed data
-                sample_X = X_processed.sample(min(100, len(X_processed)), random_state=42)
-                # Transform sample through preprocessor to get model input
-                bg = pre.transform(sample_X)
-                explainer = shap.TreeExplainer(rf)
-                shap_values = explainer.shap_values(pre.transform(sample_X))
-                try:
-                    st.set_option('deprecation.showPyplotGlobalUse', False)
-                except Exception:
-                    pass
-                shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
-                fig = plt.gcf()
-                fig.set_size_inches(5, 4)
-                st.pyplot(fig, bbox_inches='tight')
-                plt.close(fig)
+                # Plot 4: SHAP Summary (only for tree-based models)
+                if selected_model in ["Random Forest", "XGBoost"]:
+                    st.markdown("#### 🔎 SHAP Summary")
+                    try:
+                        # Build a small background set using processed data
+                        sample_X = X_processed.sample(min(100, len(X_processed)), random_state=42)
+                        # Transform sample through preprocessor to get model input
+                        bg = pre.transform(sample_X)
+                        # Get the correct model step name
+                        model_step_name = "rf" if selected_model == "Random Forest" else "xgb"
+                        if model_step_name in pipe.named_steps:
+                            model_step = pipe.named_steps[model_step_name]
+                            explainer = shap.TreeExplainer(model_step)
+                            shap_values = explainer.shap_values(pre.transform(sample_X))
+                            try:
+                                st.set_option('deprecation.showPyplotGlobalUse', False)
+                            except Exception:
+                                pass
+                            shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
+                            fig = plt.gcf()
+                            fig.set_size_inches(5, 4)
+                            st.pyplot(fig, bbox_inches='tight')
+                            plt.close(fig)
+                        else:
+                            st.warning(f"Model step '{model_step_name}' not found for SHAP analysis.")
+                    except Exception as e:
+                        st.warning(f"SHAP analysis failed: {str(e)}. This might be due to data characteristics.")
+
+                else:
+                    st.markdown("#### 🔎 Model Analysis")
+                    st.info(f"SHAP analysis not available for {selected_model}. This model uses different interpretability methods.")
             
             with col3:
-                # Plot 3: Feature Importance Barplot
-                st.markdown("#### 🌲 Feature Importance")
-                plt.figure(figsize=(5, 4))
-                sns.barplot(x="importance", y="feature", data=fi.head(15))
-                plt.tight_layout()
-                st.pyplot(plt.gcf())
-                plt.close()
-
-        elif st.session_state.plot_training_results:
-            # Render last trained results so Plot tab persists after Predict
-            saved = st.session_state.plot_training_results
-            data = saved['data']
-            X_cols = saved['X_cols']
-            y_col = saved['y_col']
-            num_cols = saved['num_cols']
-            cat_cols = saved['cat_cols']
-            pipe = saved['pipe']
-            X_processed = saved['X_processed']
-            y = saved['y_vector']
-
-            metrics = st.session_state.get('plot_model_metrics')
-            if metrics:
-                r2 = metrics.get('r2', float('nan'))
-                rmse = metrics.get('rmse', float('nan'))
-                st.markdown("""
-                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; margin: 20px 0;">
-                    <h2 style="color: white; text-align: center; margin: 0 0 20px 0;">🎯 Model Performance Dashboard</h2>
-                    <div style="display: flex; justify-content: space-around; align-items: center;">
-                        <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; min-width: 150px;">
-                            <h3 style="color: white; margin: 0; font-size: 14px;">R² Score (Test)</h3>
-                            <p style="color: white; font-size: 24px; font-weight: bold; margin: 5px 0;">{:.3f}</p>
-                            <p style="color: #e0e0e0; font-size: 12px; margin: 0;">Coefficient of Determination</p>
-                        </div>
-                        <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; min-width: 150px;">
-                            <h3 style="color: white; margin: 0; font-size: 14px;">RMSE (Test)</h3>
-                            <p style="color: white; font-size: 24px; font-weight: bold; margin: 5px 0;">{:.1f} µm</p>
-                            <p style="color: #e0e0e0; font-size: 12px; margin: 0;">Root Mean Square Error</p>
-                        </div>
-                    </div>
-                </div>
-                """.format(r2, rmse), unsafe_allow_html=True)
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.info(f"📊 **Model Quality**: {'Excellent' if r2 > 0.9 else 'Good' if r2 > 0.7 else 'Fair'}")
-                with col2:
-                    st.info(f"🎯 **Accuracy**: {'High' if rmse < 50 else 'Medium' if rmse < 100 else 'Low'}")
-                with col3:
-                    st.info(f"📈 **Reliability**: {'Very High' if r2 > 0.95 else 'High' if r2 > 0.85 else 'Moderate'}")
-
-            # 2x2 Grid
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.markdown("#### 📈 Correlation Heatmap")
-                processed_for_corr = X_processed[X_cols].copy()
-                processed_for_corr[y_col] = y
-                num_for_corr = processed_for_corr.select_dtypes(include=[np.number])
-                if num_for_corr.shape[1] >= 2:
-                    plt.figure(figsize=(6, 5))
-                    corr = num_for_corr.corr()
-                    sns.heatmap(corr, annot=True, fmt='.2f', cmap="coolwarm", center=0, square=True,
-                               cbar_kws={"shrink": .8}, annot_kws={"size": 8})
+                # Plot 3: Feature Importance Barplot (only for tree-based models)
+                if selected_model in ["Random Forest", "XGBoost"] and fi is not None:
+                    st.markdown("#### 🌲 Feature Importance")
+                    plt.figure(figsize=(5, 4))
+                    sns.barplot(x="importance", y="feature", data=fi.head(15))
                     plt.tight_layout()
                     st.pyplot(plt.gcf())
                     plt.close()
                 else:
-                    st.info("Not enough numeric columns for correlation heatmap.")
+                    st.markdown("#### 📊 Model Performance")
+                    st.info(f"Feature importance visualization not available for {selected_model}. This model focuses on overall prediction accuracy.")
 
-            with col2:
-                st.markdown("#### 📋 Top Features")
-                rf = pipe.named_steps["rf"]
-                pre = pipe.named_steps["pre"]
-                ohe = pre.named_transformers_["cat"]
-                num_names = num_cols
-                cat_expanded = []
-                if (
-                    cat_cols
-                    and hasattr(ohe, "get_feature_names_out")
-                    and hasattr(ohe, "categories_")
-                ):
-                    cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
-                full_names = num_names + cat_expanded
-                importances = rf.feature_importances_
-                fi = pd.DataFrame({"feature": full_names, "importance": importances}).sort_values("importance", ascending=False)
-                st.dataframe(fi.head(10), use_container_width=True, height=410)
+        elif st.session_state.plot_training_results:
+            # Render last trained results so Plot tab persists after Predict
+            try:
+                saved = st.session_state.plot_training_results
+                data = saved['data']
+                X_cols = saved['X_cols']
+                y_col = saved['y_col']
+                num_cols = saved['num_cols']
+                cat_cols = saved['cat_cols']
+                pipe = saved['pipe']
+                X_processed = saved['X_processed']
+                y = saved['y_vector']
 
-            col3, col4 = st.columns(2)
+                metrics = st.session_state.get('plot_model_metrics')
+                if metrics:
+                    r2 = metrics.get('r2', float('nan'))
+                    rmse = metrics.get('rmse', float('nan'))
+                    st.markdown("""
+                    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; margin: 20px 0;">
+                        <h2 style="color: white; text-align: center; margin: 0 0 20px 0;">🎯 Model Performance Dashboard</h2>
+                        <div style="display: flex; justify-content: space-around; align-items: center;">
+                            <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; min-width: 150px;">
+                                <h3 style="color: white; margin: 0; font-size: 14px;">R² Score (Test)</h3>
+                                <p style="color: white; font-size: 24px; font-weight: bold; margin: 5px 0;">{:.3f}</p>
+                                <p style="color: #e0e0e0; font-size: 12px; margin: 0;">Coefficient of Determination</p>
+                            </div>
+                            <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; min-width: 150px;">
+                                <h3 style="color: white; margin: 0; font-size: 14px;">RMSE (Test)</h3>
+                                <p style="color: white; font-size: 24px; font-weight: bold; margin: 5px 0;">{:.1f} µm</p>
+                                <p style="color: #e0e0e0; font-size: 12px; margin: 0;">Root Mean Square Error</p>
+                            </div>
+                        </div>
+                    </div>
+                    """.format(r2, rmse), unsafe_allow_html=True)
 
-            with col4:
-                st.markdown("#### 🔎 SHAP Summary")
-                sample_X = X_processed.sample(min(100, len(X_processed)), random_state=42)
-                pre = pipe.named_steps["pre"]
-                rf = pipe.named_steps["rf"]
-                explainer = shap.TreeExplainer(rf)
-                shap_values = explainer.shap_values(pre.transform(sample_X))
-                try:
-                    st.set_option('deprecation.showPyplotGlobalUse', False)
-                except Exception:
-                    pass
-                shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
-                fig = plt.gcf()
-                fig.set_size_inches(5, 4)
-                st.pyplot(fig, bbox_inches='tight')
-                plt.close(fig)
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.info(f"📊 **Model Quality**: {'Excellent' if r2 > 0.9 else 'Good' if r2 > 0.7 else 'Fair'}")
+                    with col2:
+                        st.info(f"🎯 **Accuracy**: {'High' if rmse < 50 else 'Medium' if rmse < 100 else 'Low'}")
+                    with col3:
+                        st.info(f"📈 **Reliability**: {'Very High' if r2 > 0.95 else 'High' if r2 > 0.85 else 'Moderate'}")
 
-            with col3:
-                st.markdown("#### 🌲 Feature Importance")
-                plt.figure(figsize=(5, 4))
-                sns.barplot(x="importance", y="feature", data=fi.head(15))
-                plt.tight_layout()
-                st.pyplot(plt.gcf())
-                plt.close()
+                # 2x2 Grid
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("#### 📈 Correlation Heatmap")
+                    processed_for_corr = X_processed[X_cols].copy()
+                    processed_for_corr[y_col] = y
+                    num_for_corr = processed_for_corr.select_dtypes(include=[np.number])
+                    if num_for_corr.shape[1] >= 2:
+                        plt.figure(figsize=(6, 5))
+                        corr = num_for_corr.corr()
+                        sns.heatmap(corr, annot=True, fmt='.2f', cmap="coolwarm", center=0, square=True,
+                                   cbar_kws={"shrink": .8}, annot_kws={"size": 8})
+                        plt.tight_layout()
+                        st.pyplot(plt.gcf())
+                        plt.close()
+                    else:
+                        st.info("Not enough numeric columns for correlation heatmap.")
+
+                with col2:
+                    # Plot 2: Feature Importance Table
+                    # Extract trained model and one-hot feature names
+                    pre = pipe.named_steps["pre"]
+                    # build full feature names: scaled numeric + OHE cats
+                    num_names = num_cols
+                    cat_expanded = []
+                    
+                    # Only attempt to read encoder feature names if we actually
+                    # have categorical columns and the encoder has been fitted
+                    if cat_cols:
+                        try:
+                            ohe = pre.named_transformers_["cat"]
+                            if (
+                                hasattr(ohe, "get_feature_names_out")
+                                and hasattr(ohe, "categories_")
+                            ):
+                                cat_expanded = ohe.get_feature_names_out(cat_cols).tolist()
+                        except Exception:
+                            # If categorical transformer is not available, use original names
+                            cat_expanded = cat_cols
+                    
+                    full_names = num_names + cat_expanded
+                    
+                    # Handle feature importance for different model types
+                    fi = None  # Initialize fi variable
+                    if selected_model in ["Random Forest", "XGBoost"]:
+                        # Get the correct model step name
+                        model_step_name = "rf" if selected_model == "Random Forest" else "xgb"
+                        try:
+                            if model_step_name in pipe.named_steps:
+                                model_step = pipe.named_steps[model_step_name]
+                                importances = model_step.feature_importances_
+                                fi = pd.DataFrame({"feature": full_names, "importance": importances}).sort_values("importance", ascending=False)
+                                st.markdown("#### 📋 Top Features")
+                                st.dataframe(fi.head(10), use_container_width=True, height=410)
+
+                        except Exception as e:
+                            st.markdown("#### 📋 Model Info")
+                            st.error(f"❌ **Error accessing model**: {str(e)}. Please train the model first.")
+                    else:
+                        st.markdown("#### 📋 Model Info")
+                        st.info(f"Feature importance not available for {selected_model}. This model focuses on pattern recognition rather than feature ranking.")
+
+                col3, col4 = st.columns(2)
+
+                with col4:
+                    # Plot 4: SHAP Summary (only for tree-based models)
+                    if selected_model in ["Random Forest", "XGBoost"]:
+                        st.markdown("#### 🔎 SHAP Summary")
+                        try:
+                            # Build a small background set using processed data
+                            sample_X = X_processed.sample(min(100, len(X_processed)), random_state=42)
+                            # Transform sample through preprocessor to get model input
+                            bg = pre.transform(sample_X)
+                            # Get the correct model step name
+                            model_step_name = "rf" if selected_model == "Random Forest" else "xgb"
+                            if model_step_name in pipe.named_steps:
+                                model_step = pipe.named_steps[model_step_name]
+                                explainer = shap.TreeExplainer(model_step)
+                                shap_values = explainer.shap_values(pre.transform(sample_X))
+                                try:
+                                    st.set_option('deprecation.showPyplotGlobalUse', False)
+                                except Exception:
+                                    pass
+                                shap.summary_plot(shap_values, features=pre.transform(sample_X), feature_names=full_names, show=False)
+                                fig = plt.gcf()
+                                fig.set_size_inches(5, 4)
+                                st.pyplot(fig, bbox_inches='tight')
+                                plt.close(fig)
+                        except Exception as e:
+                            st.warning(f"SHAP analysis failed: {str(e)}. This might be due to data characteristics.")
+                    else:
+                        st.markdown("#### 🔎 Model Analysis")
+                        st.info(f"SHAP analysis not available for {selected_model}. This model uses different interpretability methods.")
+
+                with col3:
+                    # Plot 3: Feature Importance Barplot (only for tree-based models)
+                    if selected_model in ["Random Forest", "XGBoost"] and fi is not None:
+                        st.markdown("#### 🌲 Feature Importance")
+                        plt.figure(figsize=(5, 4))
+                        sns.barplot(x="importance", y="feature", data=fi.head(15))
+                        plt.tight_layout()
+                        st.pyplot(plt.gcf())
+                        plt.close()
+                    else:
+                        st.markdown("#### 📊 Model Performance")
+                        st.info(f"Feature importance visualization not available for {selected_model}. This model focuses on overall prediction accuracy.")
+            except Exception as e:
+                st.error(f"❌ **Error displaying model results**: {str(e)}. Please retrain the model to fix this issue.")
+                st.info("💡 **Tip**: This error usually occurs when switching between different model types. Please train the model again with your current selection.")
 
     with tab2:
         # Initialize session state for data tab
@@ -1339,6 +1695,11 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
         with col1:
             st.markdown("#### 📊 Prediction Results")
             
+            # Show current model performance if available
+            if 'model_performances' in st.session_state and st.session_state.selected_model in st.session_state.model_performances:
+                perf = st.session_state.model_performances[st.session_state.selected_model]
+                st.info(f"🎯 **Current Model**: {st.session_state.selected_model} | R²: {perf['r2']:.3f} | RMSE: {perf['rmse']:.1f} µm")
+            
             # Initialize session state for prediction results
             if 'prediction_results' not in st.session_state:
                 st.session_state.prediction_results = None
@@ -1347,95 +1708,158 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
             
             if pred_btn:
                 if "trained_pipeline" not in st.session_state:
-                    st.error("Please train the model first (upload/select columns and click 'Train & Analyze').")
+                    st.markdown("""
+                    <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%); padding: 25px; border-radius: 12px; margin: 20px 0; text-align: center;">
+                        <h3 style="color: white; margin: 0 0 15px 0;">🔄 Model Training Required for Prediction</h3>
+                        <p style="color: white; font-size: 15px; margin: 0 0 15px 0;">
+                            <strong>No trained model found!</strong> You need to train a model before making predictions.
+                        </p>
+                        <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; margin: 10px 0;">
+                            <h4 style="color: white; margin: 0 0 8px 0;">📋 Quick Steps:</h4>
+                            <ol style="color: white; text-align: left; margin: 0; padding-left: 20px; font-size: 14px;">
+                                <li>Go to the main training section above</li>
+                                <li>Select your target and feature columns</li>
+                                <li>Choose a machine learning model</li>
+                                <li>Click <strong>"Train & Analyze"</strong></li>
+                                <li>Return here to make predictions</li>
+                            </ol>
+                        </div>
+                        <p style="color: #ffeaa7; font-size: 13px; margin: 10px 0 0 0;">
+                            💡 <strong>Tip:</strong> Once trained, you can input parameters and get instant predictions!
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                elif "data" not in st.session_state:
+                    st.error("❌ **No data available!** Please upload and process your data first.")
+                elif "X_cols" not in st.session_state:
+                    st.error("❌ **No features selected!** Please select input columns and train the model.")
+                elif "selected_model" not in st.session_state:
+                    st.error("❌ **No model selected!** Please select a model type and train it first.")
                 else:
-                    # Prediction logic here
+                    # Check if the selected model is compatible with the trained pipeline
+                    selected_model = st.session_state.get("selected_model", "Random Forest")
                     pipe = st.session_state["trained_pipeline"]
-                    data = st.session_state["data"]
-                    X_cols = st.session_state["X_cols"]
                     
-                    X = data[X_cols]
-                    y = data[y_col].astype(float)
-                    pipe, num_cols, cat_cols, X_processed = build_model(X, y)
-                    pipe.fit(X_processed, y)
+                    # Get expected model step name
+                    expected_step = "rf" if selected_model == "Random Forest" else "xgb" if selected_model == "XGBoost" else "svr" if selected_model == "SVR" else "knn"
+                    
+                    if expected_step not in pipe.named_steps:
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%); padding: 25px; border-radius: 12px; margin: 20px 0; text-align: center;">
+                            <h3 style="color: white; margin: 0 0 15px 0;">🔄 Model Configuration Changed</h3>
+                            <p style="color: white; font-size: 15px; margin: 0 0 15px 0;">
+                                <strong>Model mismatch detected!</strong> You selected '{selected_model}' but the trained model is different.
+                            </p>
+                            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; margin: 10px 0;">
+                                <h4 style="color: white; margin: 0 0 8px 0;">🛠️ Action Required:</h4>
+                                <ul style="color: white; text-align: left; margin: 0; padding-left: 20px; font-size: 14px;">
+                                    <li>Go to the training section above</li>
+                                    <li>Ensure '{selected_model}' is selected</li>
+                                    <li>Click <strong>"Train & Analyze"</strong> to retrain</li>
+                                    <li>Return here to make predictions</li>
+                                </ul>
+                            </div>
+                            <p style="color: #ffeaa7; font-size: 13px; margin: 10px 0 0 0;">
+                                💡 <strong>Note:</strong> This happens when you change the model type after training.
+                            </p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        # Prediction logic here
+                        pipe = st.session_state["trained_pipeline"]
+                        selected_model = st.session_state.get("selected_model", "Random Forest")
+                        data = st.session_state["data"]
+                        X_cols = st.session_state["X_cols"]
+                        
+                        X = data[X_cols]
+                        y = data[y_col].astype(float)
+                        pipe, num_cols, cat_cols, X_processed = build_model(X, y, selected_model, fine_tune)
+                        pipe.fit(X_processed, y)
 
-                    # Build a single-row DataFrame aligned to X_cols
-                    row = {}
-                    for c in X_cols:
-                        if c == 'Needle Size':
-                            row[c] = needle_size
-                        elif c == 'Material':
-                            # Convert material to numeric for prediction
+                        # Build a single-row DataFrame aligned to X_cols
+                        row = {}
+                        for c in X_cols:
+                            if c == 'Needle Size':
+                                row[c] = needle_size
+                            elif c == 'Material':
+                                # Convert material to numeric for prediction
+                                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                                row[c] = material_map.get(material_in, 1)
+                            elif c == 'Thivex':
+                                # Convert thivex to numeric for prediction
+                                row[c] = float(thivex_in.replace('%', ''))
+                            elif c == 'Time Period':
+                                # Convert time period to numeric for prediction
+                                time_map = {
+                                    'Phase1: First 30 mins': 1,
+                                    'Phase2: 30 mins to 60 min': 2, 
+                                    'Phase3: After 60 mins': 3
+                                }
+                                row[c] = time_map.get(time_in, 1)
+                            elif c == 'Pressure (psi)':
+                                row[c] = press_in
+                            elif c == 'Speed (mm/s)':
+                                row[c] = speed_in
+                            else:
+                                # Try to compute physics columns if names match common presets
+                                if c.lower().startswith("areaa1"):
+                                    d_mm = 0.838 if needle_size == 18 else 0.514
+                                    row[c] = np.pi * (d_mm**2) / 4.0
+                                elif c.lower().startswith("flowq1"):
+                                    d_mm = 0.838 if needle_size == 18 else 0.514
+                                    area = np.pi * (d_mm**2) / 4.0
+                                    row[c] = area * float(speed_in)
+                                elif c.lower().startswith("shears1"):
+                                    d_mm = 0.838 if needle_size == 18 else 0.514
+                                    row[c] = 8.0 * float(speed_in) / max(d_mm, 1e-6)
+                                elif c.lower().startswith("viscosn1"):
+                                    d_mm = 0.838 if needle_size == 18 else 0.514
+                                    shear = 8.0 * float(speed_in) / max(d_mm, 1e-6)
+                                    K, n = 0.9, 0.06
+                                    row[c] = K * (shear ** (n - 1.0))
+                                else:
+                                    row[c] = 0.0
+
+                        x_row = pd.DataFrame([row], columns=X_cols)
+                        
+                        # Process prediction input the same way as training data
+                        x_row_processed = x_row.copy()
+                        if 'Thivex' in x_row_processed.columns:
+                            x_row_processed['Thivex'] = x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                        if 'Material' in x_row_processed.columns:
                             material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
-                            row[c] = material_map.get(material_in, 1)
-                        elif c == 'Thivex':
-                            # Convert thivex to numeric for prediction
-                            row[c] = float(thivex_in.replace('%', ''))
-                        elif c == 'Time Period':
-                            # Convert time period to numeric for prediction
+                            x_row_processed['Material'] = x_row_processed['Material'].map(material_map)
+                        if 'Time Period' in x_row_processed.columns:
                             time_map = {
                                 'Phase1: First 30 mins': 1,
                                 'Phase2: 30 mins to 60 min': 2, 
                                 'Phase3: After 60 mins': 3
                             }
-                            row[c] = time_map.get(time_in, 1)
-                        elif c == 'Pressure (psi)':
-                            row[c] = press_in
-                        elif c == 'Speed (mm/s)':
-                            row[c] = speed_in
-                        else:
-                            # Try to compute physics columns if names match common presets
-                            if c.lower().startswith("areaa1"):
-                                d_mm = 0.838 if needle_size == 18 else 0.514
-                                row[c] = np.pi * (d_mm**2) / 4.0
-                            elif c.lower().startswith("flowq1"):
-                                d_mm = 0.838 if needle_size == 18 else 0.514
-                                area = np.pi * (d_mm**2) / 4.0
-                                row[c] = area * float(speed_in)
-                            elif c.lower().startswith("shears1"):
-                                d_mm = 0.838 if needle_size == 18 else 0.514
-                                row[c] = 8.0 * float(speed_in) / max(d_mm, 1e-6)
-                            elif c.lower().startswith("viscosn1"):
-                                d_mm = 0.838 if needle_size == 18 else 0.514
-                                shear = 8.0 * float(speed_in) / max(d_mm, 1e-6)
-                                K, n = 0.9, 0.06
-                                row[c] = K * (shear ** (n - 1.0))
-                            else:
-                                row[c] = 0.0
+                            x_row_processed['Time Period'] = x_row_processed['Time Period'].map(time_map)
+                        
+                        # Handle NaN values before prediction
+                        x_row_processed = x_row_processed.fillna(method='ffill').fillna(method='bfill').fillna(0)
+                        
+                        try:
+                            pred_width = float(pipe.predict(x_row_processed)[0])  # µm
+                        except Exception as e:
+                            st.error(f"❌ **Prediction failed**: {str(e)}. Please check your input values and try again.")
+                            st.stop()
 
-                    x_row = pd.DataFrame([row], columns=X_cols)
-                    
-                    # Process prediction input the same way as training data
-                    x_row_processed = x_row.copy()
-                    if 'Thivex' in x_row_processed.columns:
-                        x_row_processed['Thivex'] = x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
-                    if 'Material' in x_row_processed.columns:
-                        material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
-                        x_row_processed['Material'] = x_row_processed['Material'].map(material_map)
-                    if 'Time Period' in x_row_processed.columns:
-                        time_map = {
-                            'Phase1: First 30 mins': 1,
-                            'Phase2: 30 mins to 60 min': 2, 
-                            'Phase3: After 60 mins': 3
+                        # Classification by difference
+                        internal_um = INTERNAL_DIAMETER.get(needle_size, 0.0)
+                        width_diff = pred_width - internal_um
+                        verdict = quality_bucket(width_diff)
+
+                        # Save results to session state
+                        st.session_state.prediction_results = {
+                            'pred_width': pred_width,
+                            'internal_um': internal_um,
+                            'width_diff': width_diff,
+                            'verdict': verdict
                         }
-                        x_row_processed['Time Period'] = x_row_processed['Time Period'].map(time_map)
-                    
-                    pred_width = float(pipe.predict(x_row_processed)[0])  # µm
-
-                    # Classification by difference
-                    internal_um = INTERNAL_DIAMETER.get(needle_size, 0.0)
-                    width_diff = pred_width - internal_um
-                    verdict = quality_bucket(width_diff)
-
-                    # Save results to session state
-                    st.session_state.prediction_results = {
-                        'pred_width': pred_width,
-                        'internal_um': internal_um,
-                        'width_diff': width_diff,
-                        'verdict': verdict
-                    }
-                    st.session_state.last_prediction_inputs = row
-                    st.session_state.show_graphs = True  # Flag to show graphs for this prediction
+                        st.session_state.last_prediction_inputs = row
+                        st.session_state.show_graphs = True  # Flag to show graphs for this prediction
 
                     # Display results in a nice format
                     st.markdown("""
@@ -1604,7 +2028,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 results = st.session_state.prediction_results
                 st.markdown("""
                 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; margin: 20px 0;">
-                    <h3 style="color: white; text-align: center; margin: 0 0 15px 0;">🔮 Last Prediction Results</h3>
+                    <h3 style="color: white; text-align: center; margin: 0 0 15px 0;">🔮 Prediction Results</h3>
                     <div style="display: flex; justify-content: space-around; align-items: center; margin-bottom: 15px;">
                         <div style="text-align: center; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 8px; min-width: 100px;">
                             <h4 style="color: white; margin: 0; font-size: 12px;">Predicted Width</h4>
@@ -1637,148 +2061,148 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         
                         # Create two columns for the graphs
                         graph_col1, graph_col2 = st.columns(2)
-                    
-                    with graph_col1:
-                        st.markdown("**Width vs Speed**")
                         
-                        # Get actual data ranges from the training data for better graph scaling
-                        if 'data' in st.session_state:
-                            actual_speeds = st.session_state['data']['Speed (mm/s)'].dropna()
-                            min_speed = max(5.0, actual_speeds.min() * 0.5)
-                            max_speed = min(4000.0, actual_speeds.max() * 1.5)
-                        else:
+                        with graph_col1:
+                            st.markdown("**Width vs Speed**")
+                            
+                            # Get actual data ranges from the training data for better graph scaling
+                            if 'data' in st.session_state:
+                                actual_speeds = st.session_state['data']['Speed (mm/s)'].dropna()
+                                min_speed = max(5.0, actual_speeds.min() * 0.5)
+                                max_speed = min(4000.0, actual_speeds.max() * 1.5)
+                            else:
+                                saved_speed = saved_inputs.get('Speed (mm/s)', 50.0)
+                                min_speed = max(5.0, saved_speed * 0.5)
+                                max_speed = min(4000.0, saved_speed * 1.5)
+                            
+                            # Create a range of speeds based on actual data
+                            speed_range = np.linspace(min_speed, max_speed, 50)
+                            width_predictions = []
+                            
+                            for test_speed in speed_range:
+                                # Create test row with current speed
+                                test_row = saved_inputs.copy()
+                                test_row['Speed (mm/s)'] = test_speed
+                                
+                                # Update physics columns if they exist
+                                if 'AreaA1 (mm2)' in test_row:
+                                    needle_size = saved_inputs.get('Needle Size', 18)
+                                    d_mm = 0.838 if needle_size == 18 else 0.514
+                                    test_row['AreaA1 (mm2)'] = np.pi * (d_mm**2) / 4.0
+                                if 'FlowQ1 (mm3/s)' in test_row:
+                                    needle_size = saved_inputs.get('Needle Size', 18)
+                                    d_mm = 0.838 if needle_size == 18 else 0.514
+                                    area = np.pi * (d_mm**2) / 4.0
+                                    test_row['FlowQ1 (mm3/s)'] = area * test_speed
+                                if 'ShearS1 (1/s)' in test_row:
+                                    needle_size = saved_inputs.get('Needle Size', 18)
+                                    d_mm = 0.838 if needle_size == 18 else 0.514
+                                    test_row['ShearS1 (1/s)'] = 8.0 * test_speed / max(d_mm, 1e-6)
+                                if 'ViscosN1 (Pa·s)' in test_row:
+                                    needle_size = saved_inputs.get('Needle Size', 18)
+                                    d_mm = 0.838 if needle_size == 18 else 0.514
+                                    shear = 8.0 * test_speed / max(d_mm, 1e-6)
+                                    K, n = 0.9, 0.06
+                                    test_row['ViscosN1 (Pa·s)'] = K * (shear ** (n - 1.0))
+                                
+                                # Process the test row
+                                test_x_row = pd.DataFrame([test_row], columns=X_cols)
+                                test_x_row_processed = test_x_row.copy()
+                                if 'Thivex' in test_x_row_processed.columns:
+                                    test_x_row_processed['Thivex'] = test_x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                                if 'Material' in test_x_row_processed.columns:
+                                    material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                                    test_x_row_processed['Material'] = test_x_row_processed['Material'].map(material_map)
+                                if 'Time Period' in test_x_row_processed.columns:
+                                    time_map = {
+                                        'Phase1: First 30 mins': 1,
+                                        'Phase2: 30 mins to 60 min': 2, 
+                                        'Phase3: After 60 mins': 3
+                                    }
+                                    test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
+                                
+                                # Predict width for this speed
+                                test_pred_width = float(pipe.predict(test_x_row_processed)[0])
+                                width_predictions.append(test_pred_width)
+                            
+                            # Get the saved speed value for plotting
                             saved_speed = saved_inputs.get('Speed (mm/s)', 50.0)
-                            min_speed = max(5.0, saved_speed * 0.5)
-                            max_speed = min(4000.0, saved_speed * 1.5)
-                        
-                        # Create a range of speeds based on actual data
-                        speed_range = np.linspace(min_speed, max_speed, 50)
-                        width_predictions = []
-                        
-                        for test_speed in speed_range:
-                            # Create test row with current speed
-                            test_row = saved_inputs.copy()
-                            test_row['Speed (mm/s)'] = test_speed
                             
-                            # Update physics columns if they exist
-                            if 'AreaA1 (mm2)' in test_row:
-                                needle_size = saved_inputs.get('Needle Size', 18)
-                                d_mm = 0.838 if needle_size == 18 else 0.514
-                                test_row['AreaA1 (mm2)'] = np.pi * (d_mm**2) / 4.0
-                            if 'FlowQ1 (mm3/s)' in test_row:
-                                needle_size = saved_inputs.get('Needle Size', 18)
-                                d_mm = 0.838 if needle_size == 18 else 0.514
-                                area = np.pi * (d_mm**2) / 4.0
-                                test_row['FlowQ1 (mm3/s)'] = area * test_speed
-                            if 'ShearS1 (1/s)' in test_row:
-                                needle_size = saved_inputs.get('Needle Size', 18)
-                                d_mm = 0.838 if needle_size == 18 else 0.514
-                                test_row['ShearS1 (1/s)'] = 8.0 * test_speed / max(d_mm, 1e-6)
-                            if 'ViscosN1 (Pa·s)' in test_row:
-                                needle_size = saved_inputs.get('Needle Size', 18)
-                                d_mm = 0.838 if needle_size == 18 else 0.514
-                                shear = 8.0 * test_speed / max(d_mm, 1e-6)
-                                K, n = 0.9, 0.06
-                                test_row['ViscosN1 (Pa·s)'] = K * (shear ** (n - 1.0))
+                            # Create the width vs speed plot
+                            fig, ax = plt.subplots(figsize=(6, 4))
+                            ax.plot(speed_range, width_predictions, 'b-', linewidth=2, alpha=0.7)
+                            ax.scatter([saved_speed], [saved_results['pred_width']], color='red', s=100, zorder=5, label='Current Point')
+                            ax.axhline(y=saved_results['internal_um'], color='green', linestyle='--', alpha=0.7, label=f'Target ({saved_results["internal_um"]:.0f} µm)')
+                            ax.set_xlabel('Speed (mm/s)')
+                            ax.set_ylabel('Predicted Width (µm)')
+                            ax.set_title('Width vs Speed')
+                            ax.legend()
+                            ax.grid(True, alpha=0.3)
+                            plt.tight_layout()
+                            st.pyplot(fig)
+                            plt.close(fig)
+                        
+                        with graph_col2:
+                            st.markdown("**Width vs Pressure**")
                             
-                            # Process the test row
-                            test_x_row = pd.DataFrame([test_row], columns=X_cols)
-                            test_x_row_processed = test_x_row.copy()
-                            if 'Thivex' in test_x_row_processed.columns:
-                                test_x_row_processed['Thivex'] = test_x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
-                            if 'Material' in test_x_row_processed.columns:
-                                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
-                                test_x_row_processed['Material'] = test_x_row_processed['Material'].map(material_map)
-                            if 'Time Period' in test_x_row_processed.columns:
-                                time_map = {
-                                    'Phase1: First 30 mins': 1,
-                                    'Phase2: 30 mins to 60 min': 2, 
-                                    'Phase3: After 60 mins': 3
-                                }
-                                test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
+                            # Get actual data ranges from the training data for better graph scaling
+                            if 'data' in st.session_state:
+                                actual_pressures = st.session_state['data']['Pressure (psi)'].dropna()
+                                min_pressure = max(20.0, actual_pressures.min() * 0.5)
+                                max_pressure = min(200.0, actual_pressures.max() * 1.5)
+                            else:
+                                saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
+                                min_pressure = max(20.0, saved_pressure * 0.5)
+                                max_pressure = min(200.0, saved_pressure * 1.5)
                             
-                            # Predict width for this speed
-                            test_pred_width = float(pipe.predict(test_x_row_processed)[0])
-                            width_predictions.append(test_pred_width)
-                        
-                        # Get the saved speed value for plotting
-                        saved_speed = saved_inputs.get('Speed (mm/s)', 50.0)
-                        
-                        # Create the width vs speed plot
-                        fig, ax = plt.subplots(figsize=(6, 4))
-                        ax.plot(speed_range, width_predictions, 'b-', linewidth=2, alpha=0.7)
-                        ax.scatter([saved_speed], [saved_results['pred_width']], color='red', s=100, zorder=5, label='Current Point')
-                        ax.axhline(y=saved_results['internal_um'], color='green', linestyle='--', alpha=0.7, label=f'Target ({saved_results["internal_um"]:.0f} µm)')
-                        ax.set_xlabel('Speed (mm/s)')
-                        ax.set_ylabel('Predicted Width (µm)')
-                        ax.set_title('Width vs Speed')
-                        ax.legend()
-                        ax.grid(True, alpha=0.3)
-                        plt.tight_layout()
-                        st.pyplot(fig)
-                        plt.close(fig)
-                    
-                    with graph_col2:
-                        st.markdown("**Width vs Pressure**")
-                        
-                        # Get actual data ranges from the training data for better graph scaling
-                        if 'data' in st.session_state:
-                            actual_pressures = st.session_state['data']['Pressure (psi)'].dropna()
-                            min_pressure = max(20.0, actual_pressures.min() * 0.5)
-                            max_pressure = min(200.0, actual_pressures.max() * 1.5)
-                        else:
+                            # Create a range of pressures based on actual data
+                            pressure_range = np.linspace(min_pressure, max_pressure, 50)
+                            width_predictions_pressure = []
+                            
+                            for test_pressure in pressure_range:
+                                # Create test row with current pressure
+                                test_row = saved_inputs.copy()
+                                test_row['Pressure (psi)'] = test_pressure
+                                
+                                # Process the test row
+                                test_x_row = pd.DataFrame([test_row], columns=X_cols)
+                                test_x_row_processed = test_x_row.copy()
+                                if 'Thivex' in test_x_row_processed.columns:
+                                    test_x_row_processed['Thivex'] = test_x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                                if 'Material' in test_x_row_processed.columns:
+                                    material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                                    test_x_row_processed['Material'] = test_x_row_processed['Material'].map(material_map)
+                                if 'Time Period' in test_x_row_processed.columns:
+                                    time_map = {
+                                        'Phase1: First 30 mins': 1,
+                                        'Phase2: 30 mins to 60 min': 2, 
+                                        'Phase3: After 60 mins': 3
+                                    }
+                                    test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
+                                
+                                # Predict width for this pressure
+                                test_pred_width = float(pipe.predict(test_x_row_processed)[0])
+                                width_predictions_pressure.append(test_pred_width)
+                            
+                            # Get the saved pressure value for plotting
                             saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
-                            min_pressure = max(20.0, saved_pressure * 0.5)
-                            max_pressure = min(200.0, saved_pressure * 1.5)
-                        
-                        # Create a range of pressures based on actual data
-                        pressure_range = np.linspace(min_pressure, max_pressure, 50)
-                        width_predictions_pressure = []
-                        
-                        for test_pressure in pressure_range:
-                            # Create test row with current pressure
-                            test_row = saved_inputs.copy()
-                            test_row['Pressure (psi)'] = test_pressure
                             
-                            # Process the test row
-                            test_x_row = pd.DataFrame([test_row], columns=X_cols)
-                            test_x_row_processed = test_x_row.copy()
-                            if 'Thivex' in test_x_row_processed.columns:
-                                test_x_row_processed['Thivex'] = test_x_row_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
-                            if 'Material' in test_x_row_processed.columns:
-                                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
-                                test_x_row_processed['Material'] = test_x_row_processed['Material'].map(material_map)
-                            if 'Time Period' in test_x_row_processed.columns:
-                                time_map = {
-                                    'Phase1: First 30 mins': 1,
-                                    'Phase2: 30 mins to 60 min': 2, 
-                                    'Phase3: After 60 mins': 3
-                                }
-                                test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
-                            
-                            # Predict width for this pressure
-                            test_pred_width = float(pipe.predict(test_x_row_processed)[0])
-                            width_predictions_pressure.append(test_pred_width)
+                            # width vs pressure plot
+                            fig, ax = plt.subplots(figsize=(6, 4))
+                            ax.plot(pressure_range, width_predictions_pressure, 'orange', linewidth=2, alpha=0.7)
+                            ax.scatter([saved_pressure], [saved_results['pred_width']], color='red', s=100, zorder=5, label='Current Point')
+                            ax.axhline(y=saved_results['internal_um'], color='green', linestyle='--', alpha=0.7, label=f'Target ({saved_results["internal_um"]:.0f} µm)')
+                            ax.set_xlabel('Pressure (psi)')
+                            ax.set_ylabel('Predicted Width (µm)')
+                            ax.set_title('Width vs Pressure')
+                            ax.legend()
+                            ax.grid(True, alpha=0.3)
+                            plt.tight_layout()
+                            st.pyplot(fig)
+                            plt.close(fig)
                         
-                        # Get the saved pressure value for plotting
-                        saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
-                        
-                        # Create the width vs pressure plot
-                        fig, ax = plt.subplots(figsize=(6, 4))
-                        ax.plot(pressure_range, width_predictions_pressure, 'orange', linewidth=2, alpha=0.7)
-                        ax.scatter([saved_pressure], [saved_results['pred_width']], color='red', s=100, zorder=5, label='Current Point')
-                        ax.axhline(y=saved_results['internal_um'], color='green', linestyle='--', alpha=0.7, label=f'Target ({saved_results["internal_um"]:.0f} µm)')
-                        ax.set_xlabel('Pressure (psi)')
-                        ax.set_ylabel('Predicted Width (µm)')
-                        ax.set_title('Width vs Pressure')
-                        ax.legend()
-                        ax.grid(True, alpha=0.3)
-                        plt.tight_layout()
-                        st.pyplot(fig)
-                        plt.close(fig)
-                    
-                    with st.expander("📋 Show last input parameters"):
-                        st.json(st.session_state.last_prediction_inputs)
+                        with st.expander("📋 Show last input parameters"):
+                            st.json(st.session_state.last_prediction_inputs)
             else:
                 st.info("Click 'Predict Line Width' to see results.")
             st.markdown('<p style="text-align: center; color: #666; font-size: 0.9em; margin-top: 10px;">Tip: Use this panel to predict line width based on your trained model.</p>', unsafe_allow_html=True)
