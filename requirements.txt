@@ -7,3 +7,4 @@ matplotlib
 shap
 seaborn
 scikit-optimize
+xgboost
