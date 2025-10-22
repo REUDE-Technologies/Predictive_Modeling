@@ -1666,29 +1666,49 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 st.session_state.pred_pressure = 85.0
             if 'pred_speed' not in st.session_state:
                 st.session_state.pred_speed = 50.0
+            # Default manual ranges for graphs and validation
+            if 'pred_speed_min' not in st.session_state:
+                st.session_state.pred_speed_min = 5.0
+            if 'pred_speed_max' not in st.session_state:
+                st.session_state.pred_speed_max = 4000.0
+            if 'pred_pressure_min' not in st.session_state:
+                st.session_state.pred_pressure_min = 20.0
+            if 'pred_pressure_max' not in st.session_state:
+                st.session_state.pred_pressure_max = 200.0
             if 'show_graphs' not in st.session_state:
                 st.session_state.show_graphs = False
             
-            needle_size = st.selectbox("Needle Size (Gauge)", options=[18, 21], 
-                                      index=0 if st.session_state.pred_needle_size == 18 else 1,
-                                      key="pred_needle_size")
-            material_in = st.selectbox("Material", options=["DS10","DS30","SS960"],
-                                      index=["DS10","DS30","SS960"].index(st.session_state.pred_material),
-                                      key="pred_material")
-            thivex_in = st.selectbox("Thivex", options=["0","1","2"],
-                                    index=["0","1","2"].index(st.session_state.pred_thivex),
-                                    key="pred_thivex")
-            time_in = st.selectbox("Time Period", options=["Phase1: First 30 mins","Phase2: 30 mins to 60 min","Phase3: After 60 mins"],
-                                  index=["Phase1: First 30 mins","Phase2: 30 mins to 60 min","Phase3: After 60 mins"].index(st.session_state.pred_time),
-                                  key="pred_time")
-            press_in = st.number_input("Pressure (psi)", min_value=20.0, max_value=200.0, 
-                                      value=st.session_state.pred_pressure, step=1.0,
-                                      key="pred_pressure")
-            speed_in = st.number_input("Speed (mm/s)", min_value=5.0, max_value=4000.0, 
-                                      value=st.session_state.pred_speed, step=1.0,
-                                      key="pred_speed")
-            
-            pred_btn = st.button("🔮 Predict Line Width", type="primary", use_container_width=True)
+            with st.form("predict_form"):
+                needle_size = st.selectbox("Needle Size (Gauge)", options=[18, 21], 
+                                          index=0 if st.session_state.pred_needle_size == 18 else 1,
+                                          key="pred_needle_size")
+                material_in = st.selectbox("Material", options=["DS10","DS30","SS960"],
+                                          index=["DS10","DS30","SS960"].index(st.session_state.pred_material),
+                                          key="pred_material")
+                thivex_in = st.selectbox("Thivex", options=["0","1","2"],
+                                          index=["0","1","2"].index(st.session_state.pred_thivex),
+                                          key="pred_thivex")
+                time_in = st.selectbox("Time Period", options=["Phase1: First 30 mins","Phase2: 30 mins to 60 min","Phase3: After 60 mins"],
+                                        index=["Phase1: First 30 mins","Phase2: 30 mins to 60 min","Phase3: After 60 mins"].index(st.session_state.pred_time),
+                                        key="pred_time")
+                # Manual ranges for graphs and prediction checks
+                rng_col1, rng_col2 = st.columns(2)
+                with rng_col1:
+                    speed_min = st.number_input("Speed min (mm/s)", value=float(st.session_state.pred_speed_min), step=1.0, key="pred_speed_min")
+                    pressure_min = st.number_input("Pressure min (psi)", value=float(st.session_state.pred_pressure_min), step=1.0, key="pred_pressure_min")
+                with rng_col2:
+                    speed_max = st.number_input("Speed max (mm/s)", value=float(st.session_state.pred_speed_max), step=1.0, key="pred_speed_max")
+                    pressure_max = st.number_input("Pressure max (psi)", value=float(st.session_state.pred_pressure_max), step=1.0, key="pred_pressure_max")
+
+                # Main inputs
+                press_in = st.number_input("Pressure (psi)", min_value=20.0, max_value=200.0, 
+                                            value=st.session_state.pred_pressure, step=1.0,
+                                            key="pred_pressure")
+                speed_in = st.number_input("Speed (mm/s)", min_value=5.0, max_value=4000.0, 
+                                            value=st.session_state.pred_speed, step=1.0,
+                                            key="pred_speed")
+
+                pred_btn = st.form_submit_button("🔮 Predict Line Width", type="primary", use_container_width=True)
 
 
         
@@ -1894,16 +1914,14 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     with graph_col1:
                         st.markdown("**Width vs Speed**")
                         
-                        # Get actual data ranges from the training data for better graph scaling
-                        if 'data' in st.session_state:
-                            actual_speeds = st.session_state['data']['Speed (mm/s)'].dropna()
-                            min_speed = max(5.0, actual_speeds.min() * 0.5)
-                            max_speed = min(4000.0, actual_speeds.max() * 1.5)
-                        else:
-                            min_speed = max(5.0, speed_in * 0.5)
-                            max_speed = min(4000.0, speed_in * 1.5)
+                        # Use manual ranges; validate only that max > min
+                        min_speed = float(st.session_state.get('pred_speed_min', 0.0))
+                        max_speed = float(st.session_state.get('pred_speed_max', 4000.0))
+                        if max_speed <= min_speed:
+                            st.error("Speed max must be greater than speed min.")
+                            max_speed = min_speed + 1.0
                         
-                        # Create a range of speeds based on actual data
+                        # Create a range of speeds based on manual range
                         speed_range = np.linspace(min_speed, max_speed, 50)
                         width_predictions = []
                         
@@ -1954,6 +1972,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         ax.plot(speed_range, width_predictions, 'b-', linewidth=2, alpha=0.7)
                         ax.scatter([speed_in], [pred_width], color='red', s=100, zorder=5, label='Current Point')
                         ax.axhline(y=internal_um, color='green', linestyle='--', alpha=0.7, label=f'Target ({internal_um:.0f} µm)')
+                        ax.set_xlim(min_speed, max_speed)
                         ax.set_xlabel('Speed (mm/s)')
                         ax.set_ylabel('Predicted Width (µm)')
                         ax.set_title('Width vs Speed')
@@ -1966,16 +1985,14 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     with graph_col2:
                         st.markdown("**Width vs Pressure**")
                         
-                        # Get actual data ranges from the training data for better graph scaling
-                        if 'data' in st.session_state:
-                            actual_pressures = st.session_state['data']['Pressure (psi)'].dropna()
-                            min_pressure = max(20.0, actual_pressures.min() * 0.5)
-                            max_pressure = min(200.0, actual_pressures.max() * 1.5)
-                        else:
-                            min_pressure = max(20.0, press_in * 0.5)
-                            max_pressure = min(200.0, press_in * 1.5)
+                        # Use manual pressure range; validate only that max > min
+                        min_pressure = float(st.session_state.get('pred_pressure_min', 0.0))
+                        max_pressure = float(st.session_state.get('pred_pressure_max', 200.0))
+                        if max_pressure <= min_pressure:
+                            st.error("Pressure max must be greater than pressure min.")
+                            max_pressure = min_pressure + 1.0
                         
-                        # Create a range of pressures based on actual data
+                        # Create a range of pressures based on manual range
                         pressure_range = np.linspace(min_pressure, max_pressure, 50)
                         width_predictions_pressure = []
                         
@@ -2009,6 +2026,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         ax.plot(pressure_range, width_predictions_pressure, 'orange', linewidth=2, alpha=0.7)
                         ax.scatter([press_in], [pred_width], color='red', s=100, zorder=5, label='Current Point')
                         ax.axhline(y=internal_um, color='green', linestyle='--', alpha=0.7, label=f'Target ({internal_um:.0f} µm)')
+                        ax.set_xlim(min_pressure, max_pressure)
                         ax.set_xlabel('Pressure (psi)')
                         ax.set_ylabel('Predicted Width (µm)')
                         ax.set_title('Width vs Pressure')
@@ -2145,17 +2163,9 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         with graph_col2:
                             st.markdown("**Width vs Pressure**")
                             
-                            # Get actual data ranges from the training data for better graph scaling
-                            if 'data' in st.session_state:
-                                actual_pressures = st.session_state['data']['Pressure (psi)'].dropna()
-                                min_pressure = max(20.0, actual_pressures.min() * 0.5)
-                                max_pressure = min(200.0, actual_pressures.max() * 1.5)
-                            else:
-                                saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
-                                min_pressure = max(20.0, saved_pressure * 0.5)
-                                max_pressure = min(200.0, saved_pressure * 1.5)
-                            
-                            # Create a range of pressures based on actual data
+                            # Use manual pressure range set in the form
+                            min_pressure = max(1.0, float(st.session_state.get('pred_pressure_min', 20.0)))
+                            max_pressure = min(200.0, float(st.session_state.get('pred_pressure_max', 200.0)))
                             pressure_range = np.linspace(min_pressure, max_pressure, 50)
                             width_predictions_pressure = []
                             
