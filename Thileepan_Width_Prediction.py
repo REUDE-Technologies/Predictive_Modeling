@@ -1906,15 +1906,15 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     </div>
                     """.format(pred_width, internal_um, width_diff, verdict), unsafe_allow_html=True)
                     
-                    # Add results table before graphs
-                    st.markdown("#### 📋 Parameter Sweep Results")
+                    # # Add results table before graphs
+                    # st.markdown("#### 📋 Parameter Sweep Results")
                     
-                    # Generate results table
-                    results = []
-                    needle_sizes = [18, 21]
-                    best_thivex = ["0", "1", "2"]
-                    best_material = ["DS10", "DS30", "SS960"]
-                    best_time_period = ["Phase1: First 30 mins", "Phase2: 30 mins to 60 min", "Phase3: After 60 mins"]
+                    # # Generate results table
+                    # results = []
+                    # needle_sizes = [18, 21]
+                    # best_thivex = ["0", "1", "2"]
+                    # best_material = ["DS10", "DS30", "SS960"]
+                    # best_time_period = ["Phase1: First 30 mins", "Phase2: 30 mins to 60 min", "Phase3: After 60 mins"]
                     
                     # Get range values from session state
                     min_pressure = float(st.session_state.get('pred_pressure_min', 20.0))
@@ -1925,93 +1925,93 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     pressure_range = np.linspace(min_pressure, max_pressure, 5)
                     speed_range = np.linspace(min_speed, max_speed, 5)
                     
-                    needle_id_um = {18: 838.0, 21: 514.0}
+                    # needle_id_um = {18: 838.0, 21: 514.0}
                     
-                    for needle in needle_sizes:
-                        for thivex in best_thivex:
-                            for material in best_material:
-                                for time_p in best_time_period:
-                                    for pressure in pressure_range:
-                                        for speed in speed_range:
-                                            # Physics features
-                                            d_mm = 0.838 if needle == 18 else 0.514
-                                            area_mm2 = np.pi * (d_mm**2) / 4.0
-                                            flow_mm3_s = area_mm2 * speed
-                                            shear_rate = 8.0 * speed / max(d_mm, 1e-6)
-                                            K, n = 0.9, 0.06
-                                            visco_n1 = K * (shear_rate ** (n - 1.0))
+                    # for needle in needle_sizes:
+                    #     for thivex in best_thivex:
+                    #         for material in best_material:
+                    #             for time_p in best_time_period:
+                    #                 for pressure in pressure_range:
+                    #                     for speed in speed_range:
+                    #                         # Physics features
+                    #                         d_mm = 0.838 if needle == 18 else 0.514
+                    #                         area_mm2 = np.pi * (d_mm**2) / 4.0
+                    #                         flow_mm3_s = area_mm2 * speed
+                    #                         shear_rate = 8.0 * speed / max(d_mm, 1e-6)
+                    #                         K, n = 0.9, 0.06
+                    #                         visco_n1 = K * (shear_rate ** (n - 1.0))
                                             
-                                            # Build row
-                                            row = {
-                                                'Needle Size': int(needle),
-                                                'Thivex': str(thivex),
-                                                'Material': str(material),
-                                                'Pressure (psi)': float(pressure),
-                                                'Speed (mm/s)': float(speed),
-                                                'Time Period': str(time_p),
-                                                'AreaA1 (mm2)': float(area_mm2),
-                                                'FlowQ1 (mm3/s)': float(flow_mm3_s),
-                                                'ShearS1 (1/s)': float(shear_rate),
-                                                'ViscosN1 (PaS)': float(visco_n1),
-                                            }
-                                            input_df = pd.DataFrame([row])
+                    #                         # Build row
+                    #                         row = {
+                    #                             'Needle Size': int(needle),
+                    #                             'Thivex': str(thivex),
+                    #                             'Material': str(material),
+                    #                             'Pressure (psi)': float(pressure),
+                    #                             'Speed (mm/s)': float(speed),
+                    #                             'Time Period': str(time_p),
+                    #                             'AreaA1 (mm2)': float(area_mm2),
+                    #                             'FlowQ1 (mm3/s)': float(flow_mm3_s),
+                    #                             'ShearS1 (1/s)': float(shear_rate),
+                    #                             'ViscosN1 (PaS)': float(visco_n1),
+                    #                         }
+                    #                         input_df = pd.DataFrame([row])
                                             
-                                            # Process for model
-                                            input_processed = input_df.copy()
-                                            if 'Thivex' in input_processed.columns:
-                                                input_processed['Thivex'] = input_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
-                                            if 'Material' in input_processed.columns:
-                                                material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
-                                                input_processed['Material'] = input_processed['Material'].map(material_map)
-                                            if 'Time Period' in input_processed.columns:
-                                                time_map = {
-                                                    'Phase1: First 30 mins': 1,
-                                                    'Phase2: 30 mins to 60 min': 2, 
-                                                    'Phase3: After 60 mins': 3
-                                                }
-                                                input_processed['Time Period'] = input_processed['Time Period'].map(time_map)
+                    #                         # Process for model
+                    #                         input_processed = input_df.copy()
+                    #                         if 'Thivex' in input_processed.columns:
+                    #                             input_processed['Thivex'] = input_processed['Thivex'].astype(str).str.replace('%', '').astype(float)
+                    #                         if 'Material' in input_processed.columns:
+                    #                             material_map = {'DS10': 1, 'DS30': 2, 'SS960': 3}
+                    #                             input_processed['Material'] = input_processed['Material'].map(material_map)
+                    #                         if 'Time Period' in input_processed.columns:
+                    #                             time_map = {
+                    #                                 'Phase1: First 30 mins': 1,
+                    #                                 'Phase2: 30 mins to 60 min': 2, 
+                    #                                 'Phase3: After 60 mins': 3
+                    #                             }
+                    #                             input_processed['Time Period'] = input_processed['Time Period'].map(time_map)
                                             
-                                            # Predict
-                                            pred_width_um = float(pipe.predict(input_processed)[0])
+                    #                         # Predict
+                    #                         pred_width_um = float(pipe.predict(input_processed)[0])
                                             
-                                            # Difference against internal diameter
-                                            id_um = float(needle_id_um[int(needle)])
-                                            difference = pred_width_um - id_um
+                    #                         # Difference against internal diameter
+                    #                         id_um = float(needle_id_um[int(needle)])
+                    #                         difference = pred_width_um - id_um
                                             
-                                            results.append({
-                                                'Needle Size': needle,
-                                                'Pressure (psi)': pressure,
-                                                'Speed (mm/s)': speed,
-                                                'Thivex': thivex,
-                                                'Material': material,
-                                                'Time Period': time_p,
-                                                'AreaA1 (mm2)': area_mm2,
-                                                'FlowQ1 (mm3/s)': flow_mm3_s,
-                                                'ShearS1 (1/s)': shear_rate,
-                                                'ViscosN1 (PaS)': visco_n1,
-                                                'Predicted Width (µm)': pred_width_um,
-                                                'Internal Diameter (µm)': id_um,
-                                                'Difference (µm)': difference,
-                                            })
+                    #                         results.append({
+                    #                             'Needle Size': needle,
+                    #                             'Pressure (psi)': pressure,
+                    #                             'Speed (mm/s)': speed,
+                    #                             'Thivex': thivex,
+                    #                             'Material': material,
+                    #                             'Time Period': time_p,
+                    #                             'AreaA1 (mm2)': area_mm2,
+                    #                             'FlowQ1 (mm3/s)': flow_mm3_s,
+                    #                             'ShearS1 (1/s)': shear_rate,
+                    #                             'ViscosN1 (PaS)': visco_n1,
+                    #                             'Predicted Width (µm)': pred_width_um,
+                    #                             'Internal Diameter (µm)': id_um,
+                    #                             'Difference (µm)': difference,
+                    #                         })
                     
-                    # Create and display results table
-                    results_df = pd.DataFrame(results)
+                    # # Create and display results table
+                    # results_df = pd.DataFrame(results)
                     
-                    # Add quality classification
-                    def grade(diff):
-                        if -50 <= diff <= 50:
-                            return "✅ Perfect"
-                        elif -75 <= diff <= 75:
-                            return "🟡 Acceptable"
-                        elif diff < -75:
-                            return "🟠 Over extrusion"
-                        else:
-                            return "🔴 Under extrusion"
+                    # # Add quality classification
+                    # def grade(diff):
+                    #     if -50 <= diff <= 50:
+                    #         return "✅ Perfect"
+                    #     elif -75 <= diff <= 75:
+                    #         return "🟡 Acceptable"
+                    #     elif diff < -75:
+                    #         return "🟠 Over extrusion"
+                    #     else:
+                    #         return "🔴 Under extrusion"
                     
-                    results_df['Quality'] = results_df['Difference (µm)'].map(grade)
+                    # results_df['Quality'] = results_df['Difference (µm)'].map(grade)
                     
-                    # Display table
-                    st.dataframe(results_df, use_container_width=True)
+                    # # Display table
+                    # st.dataframe(results_df, use_container_width=True)
                     
                     # Add width vs speed and width vs pressure graphs
                     st.markdown("#### 📊 Parameter Range Analysis")
