@@ -1670,11 +1670,11 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
             if 'pred_speed_min' not in st.session_state:
                 st.session_state.pred_speed_min = 5.0
             if 'pred_speed_max' not in st.session_state:
-                st.session_state.pred_speed_max = 4000.0
+                st.session_state.pred_speed_max = 100.0
             if 'pred_pressure_min' not in st.session_state:
                 st.session_state.pred_pressure_min = 20.0
             if 'pred_pressure_max' not in st.session_state:
-                st.session_state.pred_pressure_max = 200.0
+                st.session_state.pred_pressure_max = 100.0
             if 'show_graphs' not in st.session_state:
                 st.session_state.show_graphs = False
             
@@ -1918,9 +1918,9 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     
                     # Get range values from session state
                     min_pressure = float(st.session_state.get('pred_pressure_min', 20.0))
-                    max_pressure = float(st.session_state.get('pred_pressure_max', 200.0))
+                    max_pressure = float(st.session_state.get('pred_pressure_max', 100.0))
                     min_speed = float(st.session_state.get('pred_speed_min', 5.0))
-                    max_speed = float(st.session_state.get('pred_speed_max', 4000.0))
+                    max_speed = float(st.session_state.get('pred_speed_max', 100.0))
                     
                     pressure_range = np.linspace(min_pressure, max_pressure, 5)
                     speed_range = np.linspace(min_speed, max_speed, 5)
@@ -2019,7 +2019,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     # Precompute ranges and predictions outside the plotting columns
                     # Speed
                     min_speed = float(st.session_state.get('pred_speed_min', 0.0))
-                    max_speed = float(st.session_state.get('pred_speed_max', 4000.0))
+                    max_speed = float(st.session_state.get('pred_speed_max', 100.0))
                     if max_speed <= min_speed:
                         st.error("Speed max must be greater than speed min.")
                         max_speed = min_speed + 1.0
@@ -2063,7 +2063,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         
                     # Pressure
                     min_pressure = float(st.session_state.get('pred_pressure_min', 0.0))
-                    max_pressure = float(st.session_state.get('pred_pressure_max', 200.0))
+                    max_pressure = float(st.session_state.get('pred_pressure_max', 100.0))
                     if max_pressure <= min_pressure:
                         st.error("Pressure max must be greater than pressure min.")
                         max_pressure = min_pressure + 1.0
@@ -2218,7 +2218,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             
                         # Pressure
                         min_pressure = max(1.0, float(st.session_state.get('pred_pressure_min', 20.0)))
-                        max_pressure = min(200.0, float(st.session_state.get('pred_pressure_max', 200.0)))
+                        max_pressure = min(100.0, float(st.session_state.get('pred_pressure_max', 100.0)))
                         pressure_range = np.linspace(min_pressure, max_pressure, 50)
                         width_predictions_pressure = []
                         for test_pressure in pressure_range:
