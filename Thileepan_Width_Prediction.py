@@ -1675,8 +1675,10 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 st.session_state.pred_pressure_min = 20.0
             if 'pred_pressure_max' not in st.session_state:
                 st.session_state.pred_pressure_max = 100.0
-            if 'pred_steps' not in st.session_state:
-                st.session_state.pred_steps = 20
+            if 'pred_speed_steps' not in st.session_state:
+                st.session_state.pred_speed_steps = 10
+            if 'pred_pressure_steps' not in st.session_state:
+                st.session_state.pred_pressure_steps = 10
             if 'show_graphs' not in st.session_state:
                 st.session_state.show_graphs = False
             
@@ -1694,20 +1696,29 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                                     index=["Phase1: First 30 mins","Phase2: 30 mins to 60 min","Phase3: After 60 mins"].index(st.session_state.pred_time),
                                     key="pred_time")
                 # Manual ranges for graphs and prediction checks
-                rng_col1, rng_col2 = st.columns(2)
-                # No hard constraints; just free numeric inputs
-                with rng_col1:
+                # Speed controls
+                speed_col1, speed_col2, speed_col3 = st.columns([1, 1, 1])
+                with speed_col1:
                     speed_min = st.number_input("Speed min (mm/s)", value=float(st.session_state.pred_speed_min), step=1.0, key="pred_speed_min")
-                    pressure_min = st.number_input("Pressure min (psi)", value=float(st.session_state.pred_pressure_min), step=1.0, key="pred_pressure_min")
-                with rng_col2:
+                with speed_col2:
                     speed_max = st.number_input("Speed max (mm/s)", value=float(st.session_state.pred_speed_max), step=1.0, key="pred_speed_max")
-                    pressure_max = st.number_input("Pressure max (psi)", value=float(st.session_state.pred_pressure_max), step=1.0, key="pred_pressure_max")
+                with speed_col3:
+                    speed_steps = st.number_input("Speed Steps", min_value=5, max_value=50, 
+                                                value=int(st.session_state.get('pred_speed_steps', 10)), step=1, 
+                                                help="Number of speed data points for analysis", 
+                                                key="pred_speed_steps")
                 
-                # Steps input for controlling range granularity
-                steps = st.number_input("Steps (for range analysis)", min_value=5, max_value=100, 
-                                      value=int(st.session_state.pred_steps), step=1, 
-                                      help="Number of steps between min and max values for analysis", 
-                                      key="pred_steps")
+                # Pressure controls
+                pressure_col1, pressure_col2, pressure_col3 = st.columns([1, 1, 1])
+                with pressure_col1:
+                    pressure_min = st.number_input("Pressure min (psi)", value=float(st.session_state.pred_pressure_min), step=1.0, key="pred_pressure_min")
+                with pressure_col2:
+                    pressure_max = st.number_input("Pressure max (psi)", value=float(st.session_state.pred_pressure_max), step=1.0, key="pred_pressure_max")
+                with pressure_col3:
+                    pressure_steps = st.number_input("Pressure Steps", min_value=5, max_value=50, 
+                                                   value=int(st.session_state.get('pred_pressure_steps', 10)), step=1, 
+                                                   help="Number of pressure data points for analysis", 
+                                                   key="pred_pressure_steps")
 
                 # Main inputs
                 press_in = st.number_input("Pressure (psi)", min_value=20.0, max_value=200.0, 
@@ -1936,9 +1947,10 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         min_speed = float(st.session_state.get('pred_speed_min', 10.0))
                         max_speed = float(st.session_state.get('pred_speed_max', 100.0))
                     
-                    steps = int(st.session_state.get('pred_steps', 20))
-                    pressure_range = np.linspace(min_pressure, max_pressure, steps)
-                    speed_range = np.linspace(min_speed, max_speed, steps)
+                    speed_steps = int(st.session_state.get('pred_speed_steps', 10))
+                    pressure_steps = int(st.session_state.get('pred_pressure_steps', 10))
+                    pressure_range = np.linspace(min_pressure, max_pressure, pressure_steps)
+                    speed_range = np.linspace(min_speed, max_speed, speed_steps)
                     
                     # Use the current prediction parameters for other variables
                     needle_id_um = {18: 838.0, 21: 514.0}
@@ -2018,7 +2030,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     max_speed = float(st.session_state.get('pred_speed_max', 100.0))
                     min_pressure = float(st.session_state.get('pred_pressure_min', 0.0))
                     max_pressure = float(st.session_state.get('pred_pressure_max', 100.0))
-                    steps = int(st.session_state.get('pred_steps', 20))
+                    speed_steps = int(st.session_state.get('pred_speed_steps', 10))
+                    pressure_steps = int(st.session_state.get('pred_pressure_steps', 10))
                     
                     if max_speed <= min_speed:
                         st.error("Speed max must be greater than speed min.")
@@ -2028,14 +2041,14 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         max_pressure = min_pressure + 1.0
                     
                     # Create meshgrid for 3D visualization
-                    speed_grid = np.linspace(min_speed, max_speed, steps)
-                    pressure_grid = np.linspace(min_pressure, max_pressure, steps)
+                    speed_grid = np.linspace(min_speed, max_speed, speed_steps)
+                    pressure_grid = np.linspace(min_pressure, max_pressure, pressure_steps)
                     S, P = np.meshgrid(speed_grid, pressure_grid)
                     
                     # Calculate width predictions for each combination
                     width_grid = np.zeros_like(S)
-                    for i in range(steps):
-                        for j in range(steps):
+                    for i in range(pressure_steps):
+                        for j in range(speed_steps):
                             test_row = row.copy()
                             test_row['Speed (mm/s)'] = S[i, j]
                             test_row['Pressure (psi)'] = P[i, j]
@@ -2161,15 +2174,16 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             min_pressure = max(1.0, saved_pressure * 0.5)
                             max_pressure = min(200.0, saved_pressure * 1.5)
                         
-                        steps = int(st.session_state.get('pred_steps', 20))
-                        speed_grid = np.linspace(min_speed, max_speed, steps)
-                        pressure_grid = np.linspace(min_pressure, max_pressure, steps)
-                        S, P = np.meshgrid(speed_grid, pressure_grid)
-                        
-                        # Calculate width predictions for each combination
-                        width_grid = np.zeros_like(S)
-                        for i in range(steps):
-                            for j in range(steps):
+                    speed_steps = int(st.session_state.get('pred_speed_steps', 10))
+                    pressure_steps = int(st.session_state.get('pred_pressure_steps', 10))
+                    speed_grid = np.linspace(min_speed, max_speed, speed_steps)
+                    pressure_grid = np.linspace(min_pressure, max_pressure, pressure_steps)
+                    S, P = np.meshgrid(speed_grid, pressure_grid)
+                    
+                    # Calculate width predictions for each combination
+                    width_grid = np.zeros_like(S)
+                    for i in range(pressure_steps):
+                        for j in range(speed_steps):
                                 test_row = saved_inputs.copy()
                                 test_row['Speed (mm/s)'] = S[i, j]
                                 test_row['Pressure (psi)'] = P[i, j]
