@@ -2115,7 +2115,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             x=[speed_in], y=[press_in], z=[pred_width],
                             mode='markers',
                             marker=dict(color='red', size=5),
-                            name='Current Point'
+                            name='Current Point',
+                            legendgroup='current_point'
                         ),
                         row=1, col=1
                     )
@@ -2138,18 +2139,26 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             x=[speed_in], y=[press_in],
                             mode='markers',
                             marker=dict(color='red', size=8),
-                            name='Current Point'
+                            name='Current Point',
+                            showlegend=False,
+                            legendgroup='current_point'
                         ),
                         row=1, col=2
                     )
 
                     fig.update_layout(
                         height=500,
-                        margin=dict(l=10, r=10, t=40, b=10),
+                        margin=dict(l=10, r=10, t=50, b=10),
                         scene=dict(
                             xaxis_title='Speed (mm/s)',
                             yaxis_title='Pressure (psi)',
                             zaxis_title='Predicted Width (µm)'
+                        ),
+                        legend=dict(
+                            orientation='h',
+                            yanchor='bottom', y=1.02,
+                            xanchor='center', x=0.5,
+                            bgcolor='rgba(255,255,255,0.7)'
                         )
                     )
                     fig.update_xaxes(title_text='Speed (mm/s)', row=1, col=2)
@@ -2298,7 +2307,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             x=[saved_speed], y=[saved_pressure], z=[saved_results['pred_width']],
                             mode='markers',
                             marker=dict(color='red', size=5),
-                            name='Current Point'
+                            name='Current Point',
+                            legendgroup='current_point'
                         ),
                         row=1, col=1
                     )
@@ -2321,18 +2331,26 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             x=[saved_speed], y=[saved_pressure],
                             mode='markers',
                             marker=dict(color='red', size=8),
-                            name='Current Point'
+                            name='Current Point',
+                            showlegend=False,
+                            legendgroup='current_point'
                         ),
                         row=1, col=2
                     )
 
                     fig.update_layout(
                         height=500,
-                        margin=dict(l=10, r=10, t=40, b=10),
+                        margin=dict(l=10, r=10, t=50, b=10),
                         scene=dict(
                             xaxis_title='Speed (mm/s)',
                             yaxis_title='Pressure (psi)',
                             zaxis_title='Predicted Width (µm)'
+                        ),
+                        legend=dict(
+                            orientation='h',
+                            yanchor='bottom', y=1.02,
+                            xanchor='center', x=0.5,
+                            bgcolor='rgba(255,255,255,0.7)'
                         )
                     )
                     fig.update_xaxes(title_text='Speed (mm/s)', row=1, col=2)
