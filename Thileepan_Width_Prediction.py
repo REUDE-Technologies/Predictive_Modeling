@@ -2128,7 +2128,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             z=width_grid,
                             colorscale='Viridis',
                             contours=dict(showlines=True),
-                            showscale=True
+                            showscale=True,
+                            colorbar=dict(title='Predicted Width (µm)')
                         ),
                         row=1, col=2
                     )
@@ -2142,7 +2143,17 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         row=1, col=2
                     )
 
-                    fig.update_layout(height=500, margin=dict(l=10, r=10, t=40, b=10))
+                    fig.update_layout(
+                        height=500,
+                        margin=dict(l=10, r=10, t=40, b=10),
+                        scene=dict(
+                            xaxis_title='Speed (mm/s)',
+                            yaxis_title='Pressure (psi)',
+                            zaxis_title='Predicted Width (µm)'
+                        )
+                    )
+                    fig.update_xaxes(title_text='Speed (mm/s)', row=1, col=2)
+                    fig.update_yaxes(title_text='Pressure (psi)', row=1, col=2)
                     st.plotly_chart(fig, use_container_width=True)
                     
                     with st.expander("📋 Show input parameters sent to model"):
@@ -2300,7 +2311,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             z=width_grid,
                             colorscale='Viridis',
                             contours=dict(showlines=True),
-                            showscale=True
+                            showscale=True,
+                            colorbar=dict(title='Predicted Width (µm)')
                         ),
                         row=1, col=2
                     )
@@ -2314,7 +2326,17 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                         row=1, col=2
                     )
 
-                    fig.update_layout(height=500, margin=dict(l=10, r=10, t=40, b=10))
+                    fig.update_layout(
+                        height=500,
+                        margin=dict(l=10, r=10, t=40, b=10),
+                        scene=dict(
+                            xaxis_title='Speed (mm/s)',
+                            yaxis_title='Pressure (psi)',
+                            zaxis_title='Predicted Width (µm)'
+                        )
+                    )
+                    fig.update_xaxes(title_text='Speed (mm/s)', row=1, col=2)
+                    fig.update_yaxes(title_text='Pressure (psi)', row=1, col=2)
                     st.plotly_chart(fig, use_container_width=True)
                     
                     with st.expander("📋 Show last input parameters"):
