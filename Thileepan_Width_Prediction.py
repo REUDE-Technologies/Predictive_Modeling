@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 import seaborn as sns
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -2089,34 +2091,59 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                             
                             width_grid[i, j] = float(pipe.predict(test_x_row_processed)[0])
                     
-                    # Create 3D surface plot
-                    fig = plt.figure(figsize=(12, 5))
-                    
-                    # 3D Surface plot
-                    ax1 = fig.add_subplot(121, projection='3d')
-                    surf = ax1.plot_surface(S, P, width_grid, cmap='viridis', alpha=0.8)
-                    ax1.scatter([speed_in], [press_in], [pred_width], color='red', s=100, label='Current Point')
-                    ax1.set_xlabel('Speed (mm/s)')
-                    ax1.set_ylabel('Pressure (psi)')
-                    ax1.set_zlabel('Predicted Width (µm)')
-                    ax1.set_title('Speed-Pressure-Width Surface')
-                    ax1.legend()
-                    
-                    # 2D Contour plot
-                    ax2 = fig.add_subplot(122)
-                    contour = ax2.contour(S, P, width_grid, levels=20, colors='black', alpha=0.6)
-                    ax2.clabel(contour, inline=True, fontsize=8)
-                    im = ax2.contourf(S, P, width_grid, levels=20, cmap='viridis', alpha=0.8)
-                    ax2.scatter([speed_in], [press_in], color='red', s=100, label='Current Point')
-                    ax2.set_xlabel('Speed (mm/s)')
-                    ax2.set_ylabel('Pressure (psi)')
-                    ax2.set_title('Speed-Pressure Contour Map')
-                    ax2.legend()
-                    plt.colorbar(im, ax=ax2, label='Predicted Width (µm)')
-                    
-                    plt.tight_layout()
-                    st.pyplot(fig)
-                    plt.close(fig)
+                    # Interactive Plotly surface + contour
+                    fig = make_subplots(
+                        rows=1, cols=2,
+                        specs=[[{'type': 'surface'}, {'type': 'contour'}]],
+                        subplot_titles=('Speed-Pressure-Width Surface', 'Speed-Pressure Contour Map')
+                    )
+
+                    # 3D surface
+                    fig.add_trace(
+                        go.Surface(
+                            x=S[0, :],
+                            y=P[:, 0],
+                            z=width_grid,
+                            colorscale='Viridis',
+                            opacity=0.9,
+                            showscale=False
+                        ),
+                        row=1, col=1
+                    )
+                    fig.add_trace(
+                        go.Scatter3d(
+                            x=[speed_in], y=[press_in], z=[pred_width],
+                            mode='markers',
+                            marker=dict(color='red', size=5),
+                            name='Current Point'
+                        ),
+                        row=1, col=1
+                    )
+
+                    # 2D contour
+                    fig.add_trace(
+                        go.Contour(
+                            x=S[0, :],
+                            y=P[:, 0],
+                            z=width_grid,
+                            colorscale='Viridis',
+                            contours=dict(showlines=True),
+                            showscale=True
+                        ),
+                        row=1, col=2
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[speed_in], y=[press_in],
+                            mode='markers',
+                            marker=dict(color='red', size=8),
+                            name='Current Point'
+                        ),
+                        row=1, col=2
+                    )
+
+                    fig.update_layout(height=500, margin=dict(l=10, r=10, t=40, b=10))
+                    st.plotly_chart(fig, use_container_width=True)
                     
                     with st.expander("📋 Show input parameters sent to model"):
                         st.json(row)
@@ -2233,36 +2260,62 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                                 
                                 width_grid[i, j] = float(pipe.predict(test_x_row_processed)[0])
 
-                    # Create 3D surface plot outside the loop to avoid duplicates
-                    fig = plt.figure(figsize=(12, 5))
-                    
-                    # 3D Surface plot
-                    ax1 = fig.add_subplot(121, projection='3d')
-                    surf = ax1.plot_surface(S, P, width_grid, cmap='viridis', alpha=0.8)
+                    # Interactive Plotly surface + contour (saved results)
+                    fig = make_subplots(
+                        rows=1, cols=2,
+                        specs=[[{'type': 'surface'}, {'type': 'contour'}]],
+                        subplot_titles=('Speed-Pressure-Width Surface', 'Speed-Pressure Contour Map')
+                    )
+
                     saved_speed = saved_inputs.get('Speed (mm/s)', 50.0)
                     saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
-                    ax1.scatter([saved_speed], [saved_pressure], [saved_results['pred_width']], color='red', s=100, label='Current Point')
-                    ax1.set_xlabel('Speed (mm/s)')
-                    ax1.set_ylabel('Pressure (psi)')
-                    ax1.set_zlabel('Predicted Width (µm)')
-                    ax1.set_title('Speed-Pressure-Width Surface')
-                    ax1.legend()
-                    
-                    # 2D Contour plot
-                    ax2 = fig.add_subplot(122)
-                    contour = ax2.contour(S, P, width_grid, levels=20, colors='black', alpha=0.6)
-                    ax2.clabel(contour, inline=True, fontsize=8)
-                    im = ax2.contourf(S, P, width_grid, levels=20, cmap='viridis', alpha=0.8)
-                    ax2.scatter([saved_speed], [saved_pressure], color='red', s=100, label='Current Point')
-                    ax2.set_xlabel('Speed (mm/s)')
-                    ax2.set_ylabel('Pressure (psi)')
-                    ax2.set_title('Speed-Pressure Contour Map')
-                    ax2.legend()
-                    plt.colorbar(im, ax=ax2, label='Predicted Width (µm)')
-                    
-                    plt.tight_layout()
-                    st.pyplot(fig)
-                    plt.close(fig)
+
+                    # 3D surface
+                    fig.add_trace(
+                        go.Surface(
+                            x=S[0, :],
+                            y=P[:, 0],
+                            z=width_grid,
+                            colorscale='Viridis',
+                            opacity=0.9,
+                            showscale=False
+                        ),
+                        row=1, col=1
+                    )
+                    fig.add_trace(
+                        go.Scatter3d(
+                            x=[saved_speed], y=[saved_pressure], z=[saved_results['pred_width']],
+                            mode='markers',
+                            marker=dict(color='red', size=5),
+                            name='Current Point'
+                        ),
+                        row=1, col=1
+                    )
+
+                    # 2D contour
+                    fig.add_trace(
+                        go.Contour(
+                            x=S[0, :],
+                            y=P[:, 0],
+                            z=width_grid,
+                            colorscale='Viridis',
+                            contours=dict(showlines=True),
+                            showscale=True
+                        ),
+                        row=1, col=2
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[saved_speed], y=[saved_pressure],
+                            mode='markers',
+                            marker=dict(color='red', size=8),
+                            name='Current Point'
+                        ),
+                        row=1, col=2
+                    )
+
+                    fig.update_layout(height=500, margin=dict(l=10, r=10, t=40, b=10))
+                    st.plotly_chart(fig, use_container_width=True)
                     
                     with st.expander("📋 Show last input parameters"):
                         st.json(st.session_state.last_prediction_inputs)
