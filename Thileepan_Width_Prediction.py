@@ -1721,7 +1721,7 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                                                    key="pred_pressure_steps")
 
                 # Main inputs
-                press_in = st.number_input("Pressure (psi)", min_value=20.0, max_value=200.0, 
+                press_in = st.number_input("Pressure (psi)", min_value=20.0, max_value=200.0,
                                         value=st.session_state.pred_pressure, step=1.0,
                                         key="pred_pressure")
                 speed_in = st.number_input("Speed (mm/s)", min_value=5.0, max_value=4000.0, 
@@ -2021,6 +2021,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     
                     # Display table
                     st.dataframe(results_df, use_container_width=True)
+                    # Preserve table across reruns
+                    st.session_state.prediction_table_df = results_df
                     
                     # Create combined speed-pressure-width visualization
                     st.markdown("#### 📊 Speed-Pressure-Width Analysis")
@@ -2148,6 +2150,11 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                 </div>
                 """.format(results['pred_width'], results['internal_um'], results['width_diff'], results['verdict']), unsafe_allow_html=True)
                 
+                # Show previously generated parameter sweep table if available
+                if 'prediction_table_df' in st.session_state and st.session_state.prediction_table_df is not None:
+                    st.markdown("#### 📋 Parameter Sweep Results")
+                    st.dataframe(st.session_state.prediction_table_df, use_container_width=True)
+
                 if st.session_state.last_prediction_inputs:
                     # Only show graphs if this is a fresh prediction (not just viewing saved results)
                     if 'show_graphs' in st.session_state and st.session_state.show_graphs:
@@ -2225,40 +2232,40 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                                     test_x_row_processed['Time Period'] = test_x_row_processed['Time Period'].map(time_map)
                                 
                                 width_grid[i, j] = float(pipe.predict(test_x_row_processed)[0])
-                        
-                        # Create 3D surface plot
-                        fig = plt.figure(figsize=(12, 5))
-                        
-                        # 3D Surface plot
-                        ax1 = fig.add_subplot(121, projection='3d')
-                        surf = ax1.plot_surface(S, P, width_grid, cmap='viridis', alpha=0.8)
-                        saved_speed = saved_inputs.get('Speed (mm/s)', 50.0)
-                        saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
-                        ax1.scatter([saved_speed], [saved_pressure], [saved_results['pred_width']], color='red', s=100, label='Current Point')
-                        ax1.set_xlabel('Speed (mm/s)')
-                        ax1.set_ylabel('Pressure (psi)')
-                        ax1.set_zlabel('Predicted Width (µm)')
-                        ax1.set_title('Speed-Pressure-Width Surface')
-                        ax1.legend()
-                        
-                        # 2D Contour plot
-                        ax2 = fig.add_subplot(122)
-                        contour = ax2.contour(S, P, width_grid, levels=20, colors='black', alpha=0.6)
-                        ax2.clabel(contour, inline=True, fontsize=8)
-                        im = ax2.contourf(S, P, width_grid, levels=20, cmap='viridis', alpha=0.8)
-                        ax2.scatter([saved_speed], [saved_pressure], color='red', s=100, label='Current Point')
-                        ax2.set_xlabel('Speed (mm/s)')
-                        ax2.set_ylabel('Pressure (psi)')
-                        ax2.set_title('Speed-Pressure Contour Map')
-                        ax2.legend()
-                        plt.colorbar(im, ax=ax2, label='Predicted Width (µm)')
-                        
-                        plt.tight_layout()
-                        st.pyplot(fig)
-                        plt.close(fig)
-                        
-                        with st.expander("📋 Show last input parameters"):
-                            st.json(st.session_state.last_prediction_inputs)
+
+                    # Create 3D surface plot outside the loop to avoid duplicates
+                    fig = plt.figure(figsize=(12, 5))
+                    
+                    # 3D Surface plot
+                    ax1 = fig.add_subplot(121, projection='3d')
+                    surf = ax1.plot_surface(S, P, width_grid, cmap='viridis', alpha=0.8)
+                    saved_speed = saved_inputs.get('Speed (mm/s)', 50.0)
+                    saved_pressure = saved_inputs.get('Pressure (psi)', 85.0)
+                    ax1.scatter([saved_speed], [saved_pressure], [saved_results['pred_width']], color='red', s=100, label='Current Point')
+                    ax1.set_xlabel('Speed (mm/s)')
+                    ax1.set_ylabel('Pressure (psi)')
+                    ax1.set_zlabel('Predicted Width (µm)')
+                    ax1.set_title('Speed-Pressure-Width Surface')
+                    ax1.legend()
+                    
+                    # 2D Contour plot
+                    ax2 = fig.add_subplot(122)
+                    contour = ax2.contour(S, P, width_grid, levels=20, colors='black', alpha=0.6)
+                    ax2.clabel(contour, inline=True, fontsize=8)
+                    im = ax2.contourf(S, P, width_grid, levels=20, cmap='viridis', alpha=0.8)
+                    ax2.scatter([saved_speed], [saved_pressure], color='red', s=100, label='Current Point')
+                    ax2.set_xlabel('Speed (mm/s)')
+                    ax2.set_ylabel('Pressure (psi)')
+                    ax2.set_title('Speed-Pressure Contour Map')
+                    ax2.legend()
+                    plt.colorbar(im, ax=ax2, label='Predicted Width (µm)')
+                    
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    plt.close(fig)
+                    
+                    with st.expander("📋 Show last input parameters"):
+                        st.json(st.session_state.last_prediction_inputs)
             else:
                 st.info("Click 'Predict Line Width' to see results.")
             st.markdown('<p style="text-align: center; color: #666; font-size: 0.9em; margin-top: 10px;">Tip: Use this panel to predict line width based on your trained model.</p>', unsafe_allow_html=True)
