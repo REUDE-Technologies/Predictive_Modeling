@@ -2165,8 +2165,8 @@ if st.session_state.files_submitted and not st.session_state.show_upload_area:
                     fig.update_yaxes(title_text='Pressure (psi)', row=1, col=2)
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    with st.expander("📋 Show input parameters sent to model"):
-                        st.json(row)
+                    # with st.expander("📋 Show input parameters sent to model"):
+                    #     st.json(row)
             
             # Display saved results if available (when page reruns)
             elif st.session_state.prediction_results is not None:
